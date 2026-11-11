@@ -10,6 +10,7 @@
 static void close_enough(double a, double b) {
     assert(fabs(a - b) < 1e-8);
 }
+
 static void test_anchor(void) {
     BMConfig config = bm_config_default();
     BMCamera c;
@@ -29,6 +30,7 @@ static void test_anchor(void) {
     bm_camera_zoom(&c, &config, anchor, -1000);
     close_enough(c.target_scale, config.min_scale);
 }
+
 static void test_frame_rate(void) {
     BMConfig config = bm_config_default();
     BMCamera a, b;
@@ -56,6 +58,7 @@ static void test_frame_rate(void) {
         bm_camera_step(&a, &config, 1.0 / 60);
     assert(!bm_camera_step(&a, &config, 1.0 / 60));
 }
+
 static void test_drag_reset(void) {
     BMConfig cfg = bm_config_default();
     BMCamera c;
@@ -81,12 +84,14 @@ static void test_drag_reset(void) {
     assert(c.offset.x > 135 && c.offset.x < 250);
     assert(c.offset.y < -70 && c.offset.y > -185);
 }
+
 static void write_config(const char *path, const char *text) {
     FILE *f = fopen(path, "w");
     assert(f);
     fputs(text, f);
     fclose(f);
 }
+
 static void test_config(void) {
     char path[] = "/tmp/boomer-config-test-XXXXXX";
     int fd = mkstemp(path);
@@ -130,6 +135,7 @@ static void test_config(void) {
     unlink(path);
     assert(!bm_config_load(path, &cfg, error, sizeof error));
 }
+
 int main(void) {
     test_anchor();
     test_frame_rate();

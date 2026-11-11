@@ -15,12 +15,14 @@ typedef NS_ENUM(NSUInteger, BMPreparation) { BMStill, BMLive, BMWarmup };
     BOOL _busy, _warming;
 }
 @synthesize displayID = _displayID;
+
 - (void)setDisplayID:(CGDirectDisplayID)displayID {
     if (_displayID == displayID)
         return;
     [self invalidate];
     _displayID = displayID;
 }
+
 - (void)prepare:(BMPreparation)mode generation:(NSUInteger)generation {
     if (_filter) {
         bm_startup_mark("capture filter reused");
@@ -123,6 +125,7 @@ typedef NS_ENUM(NSUInteger, BMPreparation) { BMStill, BMLive, BMWarmup };
                                                           cached:NO];
                                  }];
 }
+
 - (void)captureWithFilter:(SCContentFilter *)filter
             configuration:(SCStreamConfiguration *)config
                      mode:(BMPreparation)mode
@@ -188,6 +191,7 @@ typedef NS_ENUM(NSUInteger, BMPreparation) { BMStill, BMLive, BMWarmup };
                         });
                     }];
 }
+
 - (void)fail:(NSError *)error generation:(NSUInteger)generation mode:(BMPreparation)mode {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (generation != self->_generation)
@@ -199,6 +203,7 @@ typedef NS_ENUM(NSUInteger, BMPreparation) { BMStill, BMLive, BMWarmup };
         [self fail:error];
     });
 }
+
 - (void)fail:(NSError *)error {
     [self invalidate];
     [self.delegate captureFailed:error
@@ -210,6 +215,7 @@ typedef NS_ENUM(NSUInteger, BMPreparation) { BMStill, BMLive, BMWarmup };
                                                                @"Screen capture returned no image."
                                                        }]];
 }
+
 - (void)takeScreenshot {
     if (_busy || _live)
         return;
@@ -217,6 +223,7 @@ typedef NS_ENUM(NSUInteger, BMPreparation) { BMStill, BMLive, BMWarmup };
     _warming = NO;
     [self prepare:BMStill generation:++_generation];
 }
+
 - (void)startLive {
     if (_live)
         return;
@@ -225,17 +232,20 @@ typedef NS_ENUM(NSUInteger, BMPreparation) { BMStill, BMLive, BMWarmup };
     _busy = YES;
     [self prepare:BMLive generation:++_generation];
 }
+
 - (void)warmUp {
     if (_filter || _busy || _warming || _live)
         return;
     _warming = YES;
     [self prepare:BMWarmup generation:_generation];
 }
+
 - (void)invalidate {
     [self stop];
     _filter = nil;
     _configuration = nil;
 }
+
 - (void)stop {
     ++_generation;
     _busy = NO;
@@ -249,6 +259,7 @@ typedef NS_ENUM(NSUInteger, BMPreparation) { BMStill, BMLive, BMWarmup };
             (void)error;
         }];
 }
+
 - (void)stream:(SCStream *)stream
     didOutputSampleBuffer:(CMSampleBufferRef)sample
                    ofType:(SCStreamOutputType)type {
@@ -264,10 +275,12 @@ typedef NS_ENUM(NSUInteger, BMPreparation) { BMStill, BMLive, BMWarmup };
     if (buffer)
         [self.delegate captureFrame:buffer];
 }
+
 - (void)stream:(SCStream *)stream didStopWithError:(NSError *)error {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (stream == self->_stream)
             [self fail:error];
     });
 }
+
 @end

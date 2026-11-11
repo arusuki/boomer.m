@@ -52,6 +52,7 @@ static void Usage(void) {
          "          P = filtering, H / ? = help, Q / Esc = hide, Cmd-Q = quit\n"
          "          Cmd-Shift-2 = capture/hide from any application");
 }
+
 static BOOL ParseNumber(NSString *s, double lo, double hi, double *out) {
     const char *raw = s.UTF8String;
     char *end;
@@ -62,6 +63,7 @@ static BOOL ParseNumber(NSString *s, double lo, double hi, double *out) {
     *out = n;
     return YES;
 }
+
 static BMOptions *ParseOptions(int argc, const char **argv, int *result) {
     BMOptions *o = [BMOptions new];
     o.displayIndex = -1;
@@ -150,6 +152,7 @@ static BMOptions *ParseOptions(int argc, const char **argv, int *result) {
 }
 
 static CGImageRef CreateDemoImage(void) CF_RETURNS_RETAINED;
+
 static CGImageRef CreateDemoImage(void) {
     const size_t w = 1600, h = 1000;
     CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
@@ -224,12 +227,15 @@ static CGImageRef CreateDemoImage(void) {
 @interface BMWindow : NSWindow
 @end
 @implementation BMWindow
+
 - (BOOL)canBecomeKeyWindow {
     return YES;
 }
+
 - (BOOL)canBecomeMainWindow {
     return YES;
 }
+
 @end
 
 @interface BMView : MTKView
@@ -251,16 +257,20 @@ static CGImageRef CreateDemoImage(void) {
 @implementation BMView {
     NSTrackingArea *_tracking;
 }
+
 - (BOOL)acceptsFirstResponder {
     return YES;
 }
+
 - (BOOL)isFlipped {
     return YES;
 }
+
 - (BOOL)acceptsFirstMouse:(NSEvent *)event {
     (void)event;
     return YES;
 }
+
 - (void)updateTrackingAreas {
     [super updateTrackingAreas];
     if (_tracking)
@@ -272,34 +282,44 @@ static CGImageRef CreateDemoImage(void) {
             userInfo:nil];
     [self addTrackingArea:_tracking];
 }
+
 - (void)keyDown:(NSEvent *)event {
     [self.controller key:event];
 }
+
 - (void)scrollWheel:(NSEvent *)event {
     [self.controller scroll:event];
 }
+
 - (void)magnifyWithEvent:(NSEvent *)event {
     [self.controller magnify:event];
 }
+
 - (void)mouseDown:(NSEvent *)event {
     [self.controller mouseDown:event];
 }
+
 - (void)mouseDragged:(NSEvent *)event {
     [self.controller mouseDragged:event];
 }
+
 - (void)mouseUp:(NSEvent *)event {
     [self.controller mouseUp:event];
 }
+
 - (void)mouseMoved:(NSEvent *)event {
     (void)event;
     [self.controller wake];
 }
+
 - (void)rightMouseDown:(NSEvent *)event {
     (void)event;
 }
+
 - (void)resetCursorRects {
     [self addCursorRect:self.bounds cursor:NSCursor.crosshairCursor];
 }
+
 @end
 
 @implementation BMController {
@@ -323,14 +343,17 @@ static CGImageRef CreateDemoImage(void) {
     NSUInteger _hudGeneration, _sessionGeneration;
     int _exitCode;
 }
+
 - (void)quit:(id)sender {
     (void)sender;
     [NSApp terminate:nil];
 }
+
 - (void)dealloc {
     if (_pendingFrame)
         CVPixelBufferRelease(_pendingFrame);
 }
+
 - (void)installResidentControls {
     _statusItem = [NSStatusBar.systemStatusBar statusItemWithLength:NSVariableStatusItemLength];
     _statusItem.button.image = [NSImage imageWithSystemSymbolName:@"viewfinder"
@@ -382,6 +405,7 @@ static CGImageRef CreateDemoImage(void) {
                                         }];
     [self registerShortcut:nil];
 }
+
 - (void)registerShortcut:(id)sender {
     (void)sender;
     NSError *error = nil;
@@ -401,6 +425,7 @@ static CGImageRef CreateDemoImage(void) {
     else
         bm_startup_mark("global shortcut registered");
 }
+
 - (void)editShortcut:(id)sender {
     (void)sender;
     if (_editingShortcut)
@@ -460,6 +485,7 @@ static CGImageRef CreateDemoImage(void) {
     [self registerShortcut:nil];
     _editingShortcut = NO;
 }
+
 - (void)toggleCapture:(id)sender {
     (void)sender;
     if (_sessionActive)
@@ -467,12 +493,14 @@ static CGImageRef CreateDemoImage(void) {
     else
         [self startSession];
 }
+
 - (void)captureFromMenu:(id)sender {
     (void)sender;
     if (_sessionActive)
         [self dismissSession];
     [self startSession];
 }
+
 - (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)visible {
     (void)sender;
     (void)visible;
@@ -487,6 +515,7 @@ static CGImageRef CreateDemoImage(void) {
     }
     return NO;
 }
+
 - (NSRect)targetContentRect {
     NSRect rect = _screen.frame;
     if (self.options.windowed) {
@@ -498,6 +527,7 @@ static CGImageRef CreateDemoImage(void) {
     }
     return rect;
 }
+
 - (void)startSession {
     if (_quitting || !_ready || _sessionActive)
         return;
@@ -527,6 +557,7 @@ static CGImageRef CreateDemoImage(void) {
                     [self begin];
             });
 }
+
 - (void)dismissSession {
     BOOL wasActive = NSApp.active;
     _sessionActive = _shown = NO;
@@ -548,12 +579,14 @@ static CGImageRef CreateDemoImage(void) {
         _previousApp.processIdentifier != NSProcessInfo.processInfo.processIdentifier)
         [_previousApp activateWithOptions:0];
 }
+
 - (void)dismissOrQuit {
     if (self.options.oneShot)
         [NSApp terminate:nil];
     else
         [self dismissSession];
 }
+
 - (BOOL)selectScreen {
     NSArray<NSScreen *> *screens = NSScreen.screens;
     if (!screens.count || self.options.displayIndex >= (NSInteger)screens.count) {
@@ -571,6 +604,7 @@ static CGImageRef CreateDemoImage(void) {
             }
     return YES;
 }
+
 - (void)applicationWillFinishLaunching:(NSNotification *)notification {
     (void)notification;
     bm_startup_mark("AppKit will finish launching");
@@ -588,6 +622,7 @@ static CGImageRef CreateDemoImage(void) {
         [self begin];
     }
 }
+
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     (void)notification;
     bm_startup_mark("AppKit launched");
@@ -704,6 +739,7 @@ static CGImageRef CreateDemoImage(void) {
     if (self.options.background)
         bm_startup_mark("resident ready (hidden)");
 }
+
 - (void)begin {
     if (!_sessionActive || _quitting)
         return;
@@ -742,6 +778,7 @@ static CGImageRef CreateDemoImage(void) {
         [_capture takeScreenshot];
     }
 }
+
 - (BOOL)loadConfig:(BOOL)initial {
     char error[1400];
     BOOL exists = [NSFileManager.defaultManager fileExistsAtPath:self.options.configPath];
@@ -763,6 +800,7 @@ static CGImageRef CreateDemoImage(void) {
         [self toast:@"Configuration reloaded"];
     return YES;
 }
+
 - (void)fatal:(NSString *)message {
     fprintf(stderr, "Boomer: %s\n", message.UTF8String);
     _exitCode = 1;
@@ -780,6 +818,7 @@ static CGImageRef CreateDemoImage(void) {
                                                      object:NSApp]];
     exit(EXIT_FAILURE);
 }
+
 - (void)captureImage:(CGImageRef)image {
     if (!_sessionActive || _quitting)
         return;
@@ -792,6 +831,7 @@ static CGImageRef CreateDemoImage(void) {
     bm_startup_mark("image uploaded");
     [self imageReady];
 }
+
 - (void)imageReady {
     if (!_sessionActive || _quitting)
         return;
@@ -805,6 +845,7 @@ static CGImageRef CreateDemoImage(void) {
     [self toast:@"Screenshot refreshed"];
     [self wake];
 }
+
 - (void)showInitialFrameBefore:(CFTimeInterval)deadline generation:(NSUInteger)generation {
     if (_quitting || _shown || !_sessionActive || generation != _sessionGeneration)
         return;
@@ -869,6 +910,7 @@ static CGImageRef CreateDemoImage(void) {
     }
     [self wake];
 }
+
 - (void)captureFrame:(CVPixelBufferRef)buffer {
     if (_quitting || !_sessionActive)
         return;
@@ -900,6 +942,7 @@ static CGImageRef CreateDemoImage(void) {
     else
         [self wake];
 }
+
 - (void)captureFailed:(NSError *)error {
     NSString *details = [NSString stringWithFormat:@"%@ (%@, %ld)", error.localizedDescription,
                                                    error.domain, (long)error.code];
@@ -931,15 +974,18 @@ static CGImageRef CreateDemoImage(void) {
         [self toast:error.localizedDescription];
     }
 }
+
 - (BMPoint)pointer {
     NSPoint p = [_view convertPoint:[_window convertPointFromScreen:NSEvent.mouseLocation]
                            fromView:nil];
     return (BMPoint){p.x, p.y};
 }
+
 - (BMPoint)pointForEvent:(NSEvent *)event {
     NSPoint p = [_view convertPoint:event.locationInWindow fromView:nil];
     return (BMPoint){p.x, p.y};
 }
+
 - (void)wake {
     if (!_shown || _quitting || !_window.visible || _window.miniaturized)
         return;
@@ -947,6 +993,7 @@ static CGImageRef CreateDemoImage(void) {
         _lastFrame = CACurrentMediaTime() - 1.0 / 120;
     _view.paused = NO;
 }
+
 - (void)drawInMTKView:(MTKView *)view {
     _frameDrawn = NO;
     double now = CACurrentMediaTime(), dt = fmin(0.1, fmax(0, now - _lastFrame));
@@ -977,16 +1024,19 @@ static CGImageRef CreateDemoImage(void) {
     // Hidden frames are retried explicitly with their session generation.
     view.paused = !_shown || (_frameDrawn && !moving && _dim == desiredDim);
 }
+
 - (void)mtkView:(MTKView *)view drawableSizeWillChange:(CGSize)size {
     (void)view;
     (void)size;
     [self layoutHUD];
     [self wake];
 }
+
 - (void)layoutHUD {
     CGFloat width = MAX(100, MIN(660, _view.bounds.size.width - 32));
     _hud.frame = NSMakeRect(16, 16, width, _help ? 162 : 56);
 }
+
 - (void)showHelp {
     _hud.stringValue =
         @"  BOOMER / METAL\n  Scroll · +/- · Pinch    Zoom at cursor\n  Left drag              Pan "
@@ -997,6 +1047,7 @@ static CGImageRef CreateDemoImage(void) {
     _hud.hidden = NO;
     [self layoutHUD];
 }
+
 - (void)toast:(NSString *)message {
     if (_help)
         return;
@@ -1009,6 +1060,7 @@ static CGImageRef CreateDemoImage(void) {
             self->_hud.hidden = YES;
     });
 }
+
 - (void)key:(NSEvent *)event {
     NSString *s = event.charactersIgnoringModifiers.lowercaseString;
     if ([s isEqual:@"q"] && (event.modifierFlags & NSEventModifierFlagCommand)) {
@@ -1073,6 +1125,7 @@ static CGImageRef CreateDemoImage(void) {
     }
     [self wake];
 }
+
 - (void)scroll:(NSEvent *)event {
     double amount = event.scrollingDeltaY * (event.hasPreciseScrollingDeltas ? 0.003 : 0.12);
     if (event.modifierFlags & NSEventModifierFlagControl)
@@ -1082,11 +1135,13 @@ static CGImageRef CreateDemoImage(void) {
                        amount * _config.scroll_speed);
     [self wake];
 }
+
 - (void)magnify:(NSEvent *)event {
     bm_camera_zoom(&_camera, &_config, [self pointForEvent:event],
                    log(fmax(0.01, 1 + event.magnification)));
     [self wake];
 }
+
 - (void)mouseDown:(NSEvent *)event {
     _camera.dragging = YES;
     _camera.velocity = (BMPoint){0};
@@ -1096,6 +1151,7 @@ static CGImageRef CreateDemoImage(void) {
     [NSCursor.closedHandCursor set];
     [self wake];
 }
+
 - (void)mouseDragged:(NSEvent *)event {
     BMPoint p = [self pointForEvent:event];
     bm_camera_drag(&_camera, (BMPoint){p.x - _dragPoint.x, p.y - _dragPoint.y},
@@ -1104,6 +1160,7 @@ static CGImageRef CreateDemoImage(void) {
     _lastDrag = event.timestamp;
     [self wake];
 }
+
 - (void)mouseUp:(NSEvent *)event {
     _camera.dragging = NO;
     if (event.timestamp - _lastDrag > 0.08)
@@ -1111,6 +1168,7 @@ static CGImageRef CreateDemoImage(void) {
     [NSCursor.crosshairCursor set];
     [self wake];
 }
+
 - (void)windowDidResignKey:(NSNotification *)notification {
     (void)notification;
     _camera.dragging = NO;
@@ -1119,25 +1177,30 @@ static CGImageRef CreateDemoImage(void) {
     if (!self.options.windowed)
         _window.level = NSNormalWindowLevel;
 }
+
 - (void)windowDidBecomeKey:(NSNotification *)notification {
     (void)notification;
     if (!self.options.windowed)
         _window.level = NSMainMenuWindowLevel + 1;
     [self wake];
 }
+
 - (void)windowDidDeminiaturize:(NSNotification *)notification {
     (void)notification;
     [self wake];
 }
+
 - (void)windowDidChangeBackingProperties:(NSNotification *)notification {
     (void)notification;
     [self wake];
 }
+
 - (BOOL)windowShouldClose:(NSWindow *)sender {
     (void)sender;
     [self dismissOrQuit];
     return NO;
 }
+
 - (void)screensChanged:(NSNotification *)notification {
     (void)notification;
     if (!self.options.oneShot) {
@@ -1166,15 +1229,18 @@ static CGImageRef CreateDemoImage(void) {
         [_capture takeScreenshot];
     [self wake];
 }
+
 - (void)workspaceWillSleep:(NSNotification *)notification {
     (void)notification;
     [self dismissSession];
     [_capture invalidate];
 }
+
 - (void)workspaceDidWake:(NSNotification *)notification {
     (void)notification;
     [_capture invalidate];
 }
+
 - (void)applicationWillTerminate:(NSNotification *)notification {
     (void)notification;
     _quitting = YES;
@@ -1200,9 +1266,11 @@ static CGImageRef CreateDemoImage(void) {
         NSApp.active)
         [_previousApp activateWithOptions:0];
 }
+
 - (int)exitCode {
     return _exitCode;
 }
+
 @end
 
 int main(int argc, const char **argv) {

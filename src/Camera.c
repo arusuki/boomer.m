@@ -9,6 +9,7 @@
 static double clamp(double v, double lo, double hi) {
     return fmin(hi, fmax(lo, v));
 }
+
 BMConfig bm_config_default(void) {
     return (BMConfig){.min_scale = 0.01,
                       .max_scale = 64,
@@ -19,6 +20,7 @@ BMConfig bm_config_default(void) {
                       .flashlight_dim = 0.8,
                       .filter_mode = BMFilterBicubic};
 }
+
 static char *trim(char *s) {
     while (isspace((unsigned char)*s))
         ++s;
@@ -28,6 +30,7 @@ static char *trim(char *s) {
     *end = 0;
     return s;
 }
+
 bool bm_config_load(const char *path, BMConfig *out, char *error, size_t capacity) {
     FILE *f = fopen(path, "r");
     if (!f) {
@@ -115,12 +118,15 @@ bool bm_config_load(const char *path, BMConfig *out, char *error, size_t capacit
     *out = next;
     return true;
 }
+
 void bm_camera_reset(BMCamera *c, const BMConfig *cfg) {
     *c = (BMCamera){.scale = clamp(1, cfg->min_scale, cfg->max_scale), .target_scale = 1};
 }
+
 BMPoint bm_camera_world(const BMCamera *c, BMPoint p) {
     return (BMPoint){(p.x - c->offset.x) / c->scale, (p.y - c->offset.y) / c->scale};
 }
+
 void bm_camera_zoom(BMCamera *c, const BMConfig *cfg, BMPoint anchor, double delta) {
     if (!isfinite(delta))
         return;
@@ -129,6 +135,7 @@ void bm_camera_zoom(BMCamera *c, const BMConfig *cfg, BMPoint anchor, double del
     c->target_scale =
         clamp(c->target_scale * exp(clamp(delta, -20, 20)), cfg->min_scale, cfg->max_scale);
 }
+
 void bm_camera_drag(BMCamera *c, BMPoint d, double dt) {
     c->offset.x += d.x;
     c->offset.y += d.y;
@@ -143,6 +150,7 @@ void bm_camera_drag(BMCamera *c, BMPoint d, double dt) {
     } else
         c->velocity = (BMPoint){0};
 }
+
 bool bm_camera_step(BMCamera *c, const BMConfig *cfg, double dt) {
     if (!isfinite(dt) || dt <= 0)
         return false;

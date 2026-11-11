@@ -17,6 +17,7 @@ static OSStatus BMHandleHotKey(EventHandlerCallRef next, EventRef event, void *c
     dispatch_block_t _handler;
     BOOL _pressed;
 }
+
 - (instancetype)initWithKeyCode:(UInt32)keyCode
                       modifiers:(UInt32)modifiers
                         handler:(dispatch_block_t)handler {
@@ -30,15 +31,19 @@ static OSStatus BMHandleHotKey(EventHandlerCallRef next, EventRef event, void *c
     _handler = [handler copy];
     return self;
 }
+
 - (BOOL)isRegistered {
     return _hotKey != NULL;
 }
+
 - (UInt32)keyCode {
     return _keyCode;
 }
+
 - (UInt32)modifiers {
     return _modifiers;
 }
+
 - (BMHotKey *)replacementWithKeyCode:(UInt32)keyCode
                            modifiers:(UInt32)modifiers
                                error:(NSError **)error {
@@ -52,6 +57,7 @@ static OSStatus BMHandleHotKey(EventHandlerCallRef next, EventRef event, void *c
     [self unregister];
     return next;
 }
+
 - (BOOL)registerWithError:(NSError **)error {
     if (_hotKey)
         return YES;
@@ -76,6 +82,7 @@ static OSStatus BMHandleHotKey(EventHandlerCallRef next, EventRef event, void *c
                    }];
     return NO;
 }
+
 - (OSStatus)handleEvent:(EventRef)event {
     EventHotKeyID identifier;
     if (!_hotKey ||
@@ -92,6 +99,7 @@ static OSStatus BMHandleHotKey(EventHandlerCallRef next, EventRef event, void *c
     }
     return noErr;
 }
+
 - (void)unregister {
     if (_hotKey) {
         UnregisterEventHotKey(_hotKey);
@@ -103,7 +111,9 @@ static OSStatus BMHandleHotKey(EventHandlerCallRef next, EventRef event, void *c
     }
     _pressed = NO;
 }
+
 - (void)dealloc {
     [self unregister];
 }
+
 @end

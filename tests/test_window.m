@@ -10,23 +10,29 @@
 @interface BMTestController : BMController
 @end
 @implementation BMTestController
+
 - (void)installResidentControls {
 }
+
 @end
 
 @interface BMCountingCapture : BMCapture
 @property NSUInteger starts, invalidations;
 @end
 @implementation BMCountingCapture
+
 - (void)startLive {
     ++self.starts;
 }
+
 - (void)warmUp {
 }
+
 - (void)invalidate {
     ++self.invalidations;
     [super invalidate];
 }
+
 @end
 
 static void RunFor(double seconds) {
@@ -40,6 +46,7 @@ static void RunFor(double seconds) {
 @property BOOL exposedEmptyWindow;
 @end
 @implementation BMStartupRenderer
+
 - (BOOL)drawInView:(MTKView *)view uniforms:(BMUniforms)uniforms {
     if (view.presentsWithTransaction && view.window.visible)
         self.exposedEmptyWindow = YES;
@@ -52,6 +59,7 @@ static void RunFor(double seconds) {
         ++self.startupFrames;
     return drawn;
 }
+
 @end
 
 static BOOL CheckStartup(BMController *controller) {

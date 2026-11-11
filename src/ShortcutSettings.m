@@ -60,6 +60,7 @@ NSArray<NSDictionary *> *BMShortcutKeys(void) {
     id _monitor;
     BOOL _recording;
 }
+
 - (instancetype)initWithFrame:(NSRect)frame {
     self = [super initWithFrame:frame];
     if (!self)
@@ -71,11 +72,13 @@ NSArray<NSDictionary *> *BMShortcutKeys(void) {
     self.font = [NSFont systemFontOfSize:16 weight:NSFontWeightMedium];
     return self;
 }
+
 - (void)refreshTitle {
     self.title =
         [NSString stringWithFormat:@"%@  — Click to record",
                                    BMShortcutLabel(self.recordedKeyCode, self.recordedModifiers)];
 }
+
 - (void)record:(id)sender {
     (void)sender;
     [self stopRecording];
@@ -113,6 +116,7 @@ NSArray<NSDictionary *> *BMShortcutKeys(void) {
                                          return nil;
                                      }];
 }
+
 - (void)stopRecording {
     _recording = NO;
     if (_monitor) {
@@ -121,11 +125,14 @@ NSArray<NSDictionary *> *BMShortcutKeys(void) {
     }
     [self refreshTitle];
 }
+
 - (void)dealloc {
     if (_monitor)
         [NSEvent removeMonitor:_monitor];
 }
+
 @end
+
 BOOL BMShortcutIsValid(UInt32 keyCode, UInt32 modifiers) {
     if (!(modifiers & (cmdKey | controlKey)) ||
         (modifiers & ~(cmdKey | controlKey | optionKey | shiftKey)))
@@ -137,6 +144,7 @@ BOOL BMShortcutIsValid(UInt32 keyCode, UInt32 modifiers) {
             return YES;
     return NO;
 }
+
 NSString *BMShortcutLabel(UInt32 keyCode, UInt32 modifiers) {
     NSMutableString *label = [NSMutableString string];
     if (modifiers & controlKey)

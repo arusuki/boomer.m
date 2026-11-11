@@ -7,4 +7,5 @@ AllowShortIfStatementsOnASingleLine: Never
 AllowShortLoopsOnASingleLine: false
 ObjCBlockIndentWidth: 4
 PointerAlignment: Right
+SeparateDefinitionBlocks: Always
 SortIncludes: Never

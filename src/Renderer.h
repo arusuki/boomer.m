@@ -7,6 +7,7 @@ typedef struct {
     float scale, radius, dim, mirror;
     float filterMode, padding0, padding1, padding2;
 } BMUniforms;
+
 _Static_assert(sizeof(BMUniforms) == 64, "Metal uniform layout mismatch");
 
 @interface BMRenderer : NSObject

@@ -12,6 +12,7 @@ static NSMutableArray<BMContentCompletion> *contents;
 @interface BMCaptureAPIMock : NSObject
 @end
 @implementation BMCaptureAPIMock
+
 + (void)captureSampleBufferWithFilter:(SCContentFilter *)filter
                         configuration:(SCStreamConfiguration *)config
                     completionHandler:(BMSampleCompletion)completion {
@@ -19,6 +20,7 @@ static NSMutableArray<BMContentCompletion> *contents;
     (void)config;
     [samples addObject:[completion copy]];
 }
+
 + (void)getShareableContentExcludingDesktopWindows:(BOOL)desktop
                                onScreenWindowsOnly:(BOOL)onScreen
                                  completionHandler:(BMContentCompletion)completion {
@@ -26,6 +28,7 @@ static NSMutableArray<BMContentCompletion> *contents;
     (void)onScreen;
     [contents addObject:[completion copy]];
 }
+
 @end
 
 @interface BMCaptureRecorder : NSObject <BMCaptureDelegate>
@@ -33,6 +36,7 @@ static NSMutableArray<BMContentCompletion> *contents;
 @property BOOL correctThread, validPixels;
 @end
 @implementation BMCaptureRecorder
+
 - (void)captureFrame:(CVPixelBufferRef)buffer {
     ++_frames;
     _correctThread = NSThread.isMainThread;
@@ -43,11 +47,13 @@ static NSMutableArray<BMContentCompletion> *contents;
     _validPixels = CVPixelBufferGetWidth(buffer) == 8 && pixels && pixels[0] == 123;
     CVPixelBufferUnlockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly);
 }
+
 - (void)captureFailed:(NSError *)error {
     (void)error;
     ++_failures;
     _correctThread = NSThread.isMainThread;
 }
+
 @end
 
 static void Drain(void) {
@@ -59,11 +65,13 @@ static void Drain(void) {
         [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode
                                beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
 }
+
 static void SeedCache(BMCapture *capture) {
     // The mocked API treats filter/config as opaque, as the cache should.
     [capture setValue:[NSObject new] forKey:@"filter"];
     [capture setValue:[SCStreamConfiguration new] forKey:@"configuration"];
 }
+
 static BOOL CompleteSample(NSUInteger index) {
     CVPixelBufferRef buffer = NULL;
     CMVideoFormatDescriptionRef format = NULL;
@@ -90,6 +98,7 @@ static BOOL CompleteSample(NSUInteger index) {
     Drain();
     return status == noErr;
 }
+
 static BOOL Swap(Class cls, SEL selector) {
     Method original = class_getClassMethod(cls, selector);
     Method mock = class_getClassMethod(BMCaptureAPIMock.class, selector);

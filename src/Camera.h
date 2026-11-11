@@ -6,12 +6,15 @@
 typedef struct {
     double x, y;
 } BMPoint;
+
 typedef enum { BMFilterNearest, BMFilterLinear, BMFilterBicubic } BMFilterMode;
+
 typedef struct {
     double min_scale, max_scale, scroll_speed, drag_friction, scale_friction;
     double flashlight_radius, flashlight_dim;
     BMFilterMode filter_mode;
 } BMConfig;
+
 typedef struct {
     BMPoint offset, velocity, anchor;
     double scale, target_scale;

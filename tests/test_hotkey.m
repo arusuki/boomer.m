@@ -3,9 +3,11 @@
 #import "ShortcutSettings.h"
 
 @implementation BMHotKey (TestEvents)
+
 - (EventHotKeyID)testIdentifier {
     return _identifier;
 }
+
 @end
 
 static BOOL Send(BMHotKey *key, UInt32 kind) {

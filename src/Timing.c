@@ -10,12 +10,15 @@ static double now(void) {
     clock_gettime(CLOCK_MONOTONIC, &t);
     return (double)t.tv_sec + (double)t.tv_nsec / 1e9;
 }
+
 void bm_startup_begin(void) {
     started = now();
 }
+
 void bm_startup_trace_enable(bool enabled) {
     tracing = enabled;
 }
+
 void bm_startup_mark(const char *stage) {
     if (tracing)
         fprintf(stderr, "Startup +%8.1f ms: %s\n", (now() - started) * 1000, stage);

@@ -7,14 +7,17 @@ struct Uniforms {
     float scale, radius, dim, mirror;
     float filterMode, padding0, padding1, padding2;
 };
+
 struct Vertex {
     float4 position [[position]];
     float2 uv;
 };
+
 vertex Vertex fullscreenVertex(uint id [[vertex_id]]) {
     float2 uv = float2((id << 1) & 2, id & 2);
     return {float4(uv * float2(2, -2) + float2(-1, 1), 0, 1), uv};
 }
+
 // Interpolating Catmull-Rom kernel: preserves texel centers and gives a
 // narrower edge transition than bilinear filtering when magnified.
 static float4 cubicWeights(float t) {
@@ -22,6 +25,7 @@ static float4 cubicWeights(float t) {
     return float4(-0.5 * t + t2 - 0.5 * t3, 1.0 - 2.5 * t2 + 1.5 * t3,
                   0.5 * t + 2.0 * t2 - 1.5 * t3, -0.5 * t2 + 0.5 * t3);
 }
+
 static float4 sampleBicubic(texture2d<float> screen, float2 uv) {
     float2 size = float2(screen.get_width(), screen.get_height());
     float2 position = uv * size - 0.5;
@@ -44,6 +48,7 @@ static float4 sampleBicubic(texture2d<float> screen, float2 uv) {
     result.rgb = min(result.rgb, float3(result.a)); // Keep premultiplied alpha valid.
     return result;
 }
+
 fragment float4 screenFragment(Vertex in [[stage_in]], texture2d<float> screen [[texture(0)]],
                                constant Uniforms &u [[buffer(0)]]) {
     float2 p = in.uv * u.viewport;

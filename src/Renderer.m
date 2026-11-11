@@ -7,6 +7,7 @@ static NSError *BMRenderError(NSString *message) {
                                code:1
                            userInfo:@{NSLocalizedDescriptionKey : message}];
 }
+
 @implementation BMRenderer {
     id<MTLCommandQueue> _queue;
     id<MTLRenderPipelineState> _pipeline;
@@ -16,6 +17,7 @@ static NSError *BMRenderError(NSString *message) {
     CVMetalTextureRef _videoTexture;
     dispatch_semaphore_t _inflight;
 }
+
 - (instancetype)initWithError:(NSError **)error {
     self = [super init];
     if (!self)
@@ -42,6 +44,7 @@ static NSError *BMRenderError(NSString *message) {
         return nil;
     return self;
 }
+
 - (void)dealloc {
     if (_videoTexture)
         CFRelease(_videoTexture);
@@ -50,6 +53,7 @@ static NSError *BMRenderError(NSString *message) {
     if (_cache)
         CFRelease(_cache);
 }
+
 - (BOOL)compileSource:(NSString *)source error:(NSError **)error {
     id<MTLLibrary> library = [_device newLibraryWithSource:source options:nil error:error];
     bm_startup_mark("Metal library compiled");
@@ -71,15 +75,18 @@ static NSError *BMRenderError(NSString *message) {
     _pipeline = next;
     return YES;
 }
+
 - (BOOL)reloadShader:(NSString *)path error:(NSError **)error {
     NSString *s = [NSString stringWithContentsOfFile:path
                                             encoding:NSUTF8StringEncoding
                                                error:error];
     return s && [self compileSource:s error:error];
 }
+
 - (CGSize)imageSize {
     return CGSizeMake((CGFloat)_texture.width, (CGFloat)_texture.height);
 }
+
 - (void)clearImage {
     _texture = nil;
     if (_videoTexture) {
@@ -92,6 +99,7 @@ static NSError *BMRenderError(NSString *message) {
     }
     CVMetalTextureCacheFlush(_cache, 0);
 }
+
 - (BOOL)setImage:(CGImageRef)image error:(NSError **)error {
     size_t w = CGImageGetWidth(image), h = CGImageGetHeight(image);
     if (!w || !h || w > 16384 || h > 16384) {
@@ -138,6 +146,7 @@ static NSError *BMRenderError(NSString *message) {
     }
     return YES;
 }
+
 - (BOOL)setPixelBuffer:(CVPixelBufferRef)buffer {
     CVMetalTextureRef next = NULL;
     CVReturn result = CVMetalTextureCacheCreateTextureFromImage(
@@ -154,6 +163,7 @@ static NSError *BMRenderError(NSString *message) {
     _texture = CVMetalTextureGetTexture(next);
     return _texture != nil;
 }
+
 - (void)encode:(id<MTLCommandBuffer>)commands
           pass:(MTLRenderPassDescriptor *)pass
       uniforms:(BMUniforms)u {
@@ -164,6 +174,7 @@ static NSError *BMRenderError(NSString *message) {
     [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [encoder endEncoding];
 }
+
 - (BOOL)drawInView:(MTKView *)view uniforms:(BMUniforms)uniforms {
     if (!_texture || dispatch_semaphore_wait(_inflight, DISPATCH_TIME_NOW))
         return NO;
@@ -208,6 +219,7 @@ static NSError *BMRenderError(NSString *message) {
     [commands commit];
     return YES;
 }
+
 - (BOOL)selfTestFiltering:(NSError **)error {
     // Mid-gray steps expose cubic overshoot that a black/white fixture would
     // hide through the render target's own [0,1] clamp. Also exercise alpha.
@@ -312,6 +324,7 @@ static NSError *BMRenderError(NSString *message) {
     }
     return YES;
 }
+
 - (BOOL)selfTestImageSource:(BOOL)usePixelBuffer error:(NSError **)error {
     // Asymmetric 2×2 fixture catches flips, mirroring, channel swaps and shader ABI issues.
     uint8_t pixels[] = {0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 255, 255, 255, 255, 255};
@@ -418,8 +431,10 @@ static NSError *BMRenderError(NSString *message) {
     }
     return YES;
 }
+
 - (BOOL)selfTest:(NSError **)error {
     return [self selfTestImageSource:NO error:error] &&
            [self selfTestImageSource:YES error:error] && [self selfTestFiltering:error];
 }
+
 @end
