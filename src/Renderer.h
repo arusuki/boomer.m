@@ -15,6 +15,7 @@ _Static_assert(sizeof(BMUniforms) == 64, "Metal uniform layout mismatch");
 - (instancetype)initWithError:(NSError **)error;
 - (BOOL)setImage:(CGImageRef)image error:(NSError **)error;
 - (BOOL)setPixelBuffer:(CVPixelBufferRef)buffer;
+- (void)clearImage;
 - (BOOL)reloadShader:(NSString *)path error:(NSError **)error;
 // NO means no frame was submitted; callers must retry before going idle.
 // Transaction-backed presentation waits for the GPU (used only at startup).

@@ -4,9 +4,12 @@
 #import "Camera.h"
 #import "Renderer.h"
 #import "Capture.h"
+#import "HotKey.h"
+#import "ShortcutSettings.h"
+#include "Timing.h"
 #include <errno.h>
 
-static NSString *const Version = @"boomer.m 0.1.1";
+static NSString *const Version = @"boomer.m 0.2.0";
 static const char *DefaultConfig =
     "# Boomer.m — ~/.config/boomer/config (or $XDG_CONFIG_HOME/boomer/config)\n"
     "min_scale = 0.01\nmax_scale = 64\nscroll_speed = 1.5\n"
@@ -15,7 +18,7 @@ static const char *DefaultConfig =
     "# 0 = nearest, 1 = linear, 2 = bicubic (smooth text)\nfilter_mode = 2\n";
 
 @interface BMOptions : NSObject
-@property BOOL windowed, demo, live, selfTest, listDisplays;
+@property BOOL windowed, demo, live, selfTest, listDisplays, traceStartup, oneShot, background;
 @property NSInteger displayIndex;
 @property double delay, quitAfter;
 @property(copy) NSString *imagePath, *configPath, *shaderPath, *generatedConfigPath;
@@ -39,11 +42,15 @@ static void Usage(void) {
          "      --demo               Built-in test card; no capture permission\n"
          "      --shader PATH        Load Metal source; Ctrl-R reloads it\n"
          "      --self-test          Run offscreen Metal rendering tests\n"
+         "      --trace-startup      Log startup stages and elapsed milliseconds\n"
+         "      --background        Start resident without taking a screenshot\n"
+         "      --once              Exit on Esc/Q; do not register a global shortcut\n"
          "      --quit-after SECONDS Auto-quit after startup (for smoke tests)\n\n"
          "Controls: wheel / +/- / pinch = zoom at pointer, left drag = pan\n"
          "          0 = reset, M = mirror, F = flashlight, Ctrl-wheel = radius\n"
          "          R = reload config, L = live/freeze, Space = refresh screenshot\n"
-         "          P = nearest/linear/bicubic filtering, H / ? = help, Q / Esc = quit");
+         "          P = filtering, H / ? = help, Q / Esc = hide, Cmd-Q = quit\n"
+         "          Cmd-Shift-2 = capture/hide from any application");
 }
 static BOOL ParseNumber(NSString *s, double lo, double hi, double *out) {
     const char *raw = s.UTF8String; char *end;
@@ -66,6 +73,9 @@ static BMOptions *ParseOptions(int argc, const char **argv, int *result) {
         else if ([a isEqual:@"--demo"]) o.demo = YES;
         else if ([a isEqual:@"--live"]) o.live = YES;
         else if ([a isEqual:@"--self-test"]) o.selfTest = YES;
+        else if ([a isEqual:@"--trace-startup"]) o.traceStartup = YES;
+        else if ([a isEqual:@"--once"]) o.oneShot = YES;
+        else if ([a isEqual:@"--background"]) o.background = YES;
         else if ([a isEqual:@"--list-displays"]) o.listDisplays = YES;
         else if ([a isEqual:@"--new-config"]) {
             o.generatedConfigPath = i + 1 < argc && argv[i + 1][0] != '-' ? @(argv[++i]) : o.configPath;
@@ -92,6 +102,9 @@ static BMOptions *ParseOptions(int argc, const char **argv, int *result) {
     }
     if ((o.demo && o.imagePath) || (o.live && (o.demo || o.imagePath))) {
         fprintf(stderr, "--demo, --image and --live cannot be combined.\n"); *result = 2; return nil;
+    }
+    if (o.background && (o.oneShot || o.quitAfter > 0)) {
+        fprintf(stderr, "--background cannot be combined with --once or --quit-after.\n"); *result = 2; return nil;
     }
     return o;
 }
@@ -191,24 +204,204 @@ static CGImageRef CreateDemoImage(void) {
     BMView *_view;
     BMRenderer *_renderer;
     BMCapture *_capture;
+    CVPixelBufferRef _pendingFrame;
     NSScreen *_screen;
     NSRunningApplication *_previousApp;
     NSTextField *_hud;
+    NSStatusItem *_statusItem;
+    NSMenuItem *_shortcutStatus, *_retryShortcut, *_captureMenu;
+    BOOL _editingShortcut;
+    BMHotKey *_hotKey;
     BMConfig _config;
     BMCamera _camera;
-    BOOL _mirror, _flashlight, _help, _shown, _quitting, _frameDrawn;
-    double _radius, _dim, _lastFrame, _lastDrag;
+    BOOL _mirror, _flashlight, _help, _shown, _quitting, _frameDrawn, _sessionActive, _ready;
+    double _radius, _dim, _lastFrame, _lastDrag, _sessionStarted;
     BMPoint _dragPoint;
-    NSUInteger _hudGeneration;
+    NSUInteger _hudGeneration, _sessionGeneration;
     int _exitCode;
 }
 - (void)quit:(id)sender { (void)sender; [NSApp terminate:nil]; }
+- (void)dealloc {
+    if (_pendingFrame) CVPixelBufferRelease(_pendingFrame);
+}
+- (void)installResidentControls {
+    _statusItem = [NSStatusBar.systemStatusBar statusItemWithLength:NSVariableStatusItemLength];
+    _statusItem.button.image = [NSImage imageWithSystemSymbolName:@"viewfinder" accessibilityDescription:@"Boomer"];
+    if (!_statusItem.button.image) _statusItem.button.title = @"B";
+    _statusItem.button.toolTip = @"Boomer — Cmd+Shift+2 to capture or hide";
+    NSMenu *menu = [NSMenu new];
+    NSMenuItem *capture = [[NSMenuItem alloc] initWithTitle:@"Capture Screen  ⌘⇧2" action:@selector(captureFromMenu:) keyEquivalent:@""];
+    capture.target = self; [menu addItem:capture];
+    _captureMenu = capture;
+    NSMenuItem *settings = [[NSMenuItem alloc] initWithTitle:@"Shortcut Settings…" action:@selector(editShortcut:) keyEquivalent:@","];
+    settings.target = self; [menu addItem:settings];
+    _shortcutStatus = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
+    [menu addItem:_shortcutStatus];
+    _retryShortcut = [[NSMenuItem alloc] initWithTitle:@"Retry Global Shortcut" action:@selector(registerShortcut:) keyEquivalent:@""];
+    _retryShortcut.target = self; [menu addItem:_retryShortcut];
+    [menu addItem:NSMenuItem.separatorItem];
+    NSMenuItem *quit = [[NSMenuItem alloc] initWithTitle:@"Quit Boomer" action:@selector(quit:) keyEquivalent:@"q"];
+    quit.target = self; [menu addItem:quit];
+    _statusItem.menu = menu;
+    __weak BMController *weakSelf = self;
+    NSDictionary *saved = [NSUserDefaults.standardUserDefaults dictionaryForKey:@"GlobalShortcut"];
+    id codeValue = saved[@"keyCode"], modifierValue = saved[@"modifiers"];
+    UInt32 code = kVK_ANSI_2, modifiers = cmdKey | shiftKey;
+    if ([codeValue isKindOfClass:NSNumber.class] && [modifierValue isKindOfClass:NSNumber.class] &&
+        BMShortcutIsValid([codeValue unsignedIntValue], [modifierValue unsignedIntValue])) {
+        code = [codeValue unsignedIntValue]; modifiers = [modifierValue unsignedIntValue];
+    }
+    _hotKey = [[BMHotKey alloc] initWithKeyCode:code modifiers:modifiers handler:^{
+        BMController *controller = weakSelf;
+        if (controller && !controller->_editingShortcut) [controller toggleCapture:nil];
+    }];
+    [self registerShortcut:nil];
+}
+- (void)registerShortcut:(id)sender {
+    (void)sender;
+    NSError *error = nil;
+    BOOL registered = [_hotKey registerWithError:&error];
+    NSString *label = BMShortcutLabel(_hotKey.keyCode, _hotKey.modifiers);
+    _captureMenu.title = [@"Capture Screen  " stringByAppendingString:label];
+    _shortcutStatus.title = [label stringByAppendingString:registered ? @" is ready" : @" unavailable — choose another shortcut"];
+    _retryShortcut.hidden = registered;
+    _statusItem.button.toolTip = registered ? [NSString stringWithFormat:@"Boomer — %@ to capture or hide", label] : error.localizedDescription;
+    if (!registered) fprintf(stderr, "Boomer shortcut: %s (%ld)\n", error.localizedDescription.UTF8String, (long)error.code);
+    else bm_startup_mark("global shortcut registered");
+}
+- (void)editShortcut:(id)sender {
+    (void)sender;
+    if (_editingShortcut) return;
+    _editingShortcut = YES;
+    if (_sessionActive) [self dismissSession];
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = @"Global Shortcut";
+    alert.informativeText = @"Click the field, then press your shortcut. Include Command or Control. Esc cancels recording.";
+    [alert addButtonWithTitle:@"Save"]; [alert addButtonWithTitle:@"Cancel"]; [alert addButtonWithTitle:@"Restore Default"];
+    BMShortcutRecorder *recorder = [[BMShortcutRecorder alloc] initWithFrame:NSMakeRect(0, 0, 380, 48)];
+    recorder.recordedKeyCode = _hotKey.keyCode; recorder.recordedModifiers = _hotKey.modifiers;
+    [recorder refreshTitle]; alert.accessoryView = recorder;
+    // Let the recorder receive even the currently registered global shortcut.
+    [_hotKey unregister];
+    [NSApp activateIgnoringOtherApps:YES];
+    for (;;) {
+        NSModalResponse response = [alert runModal];
+        [recorder stopRecording];
+        if (response == NSAlertThirdButtonReturn) {
+            recorder.recordedKeyCode = kVK_ANSI_2; recorder.recordedModifiers = cmdKey | shiftKey;
+            [recorder refreshTitle];
+            alert.informativeText = @"Default selected. Click Save to apply Cmd+Shift+2.";
+            continue;
+        }
+        if (response != NSAlertFirstButtonReturn) break;
+        UInt32 code = recorder.recordedKeyCode, modifiers = recorder.recordedModifiers;
+        if (!BMShortcutIsValid(code, modifiers)) { alert.informativeText = @"Include at least Command or Control. Cmd-Q is reserved for Quit."; continue; }
+        NSError *error = nil;
+        BMHotKey *next = [_hotKey replacementWithKeyCode:code modifiers:modifiers error:&error];
+        if (!next) { alert.informativeText = @"That shortcut is unavailable. Choose another combination. Your previous shortcut has been kept."; continue; }
+        _hotKey = next;
+        [NSUserDefaults.standardUserDefaults setObject:@{@"keyCode":@(code), @"modifiers":@(modifiers)} forKey:@"GlobalShortcut"];
+        [self registerShortcut:nil];
+        break;
+    }
+    [recorder stopRecording];
+    [self registerShortcut:nil];
+    _editingShortcut = NO;
+}
+- (void)toggleCapture:(id)sender {
+    (void)sender;
+    if (_sessionActive) [self dismissSession]; else [self startSession];
+}
+- (void)captureFromMenu:(id)sender {
+    (void)sender;
+    if (_sessionActive) [self dismissSession];
+    [self startSession];
+}
+- (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)visible {
+    (void)sender; (void)visible;
+    if (!_ready || _quitting || _editingShortcut) return NO;
+    // Reopening must not toggle off a capture that a hot key just started.
+    if (!_sessionActive) [self startSession];
+    else if (_shown) { [_window makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES]; }
+    return NO;
+}
+- (NSRect)targetContentRect {
+    NSRect rect = _screen.frame;
+    if (self.options.windowed) {
+        NSRect visible = _screen.visibleFrame;
+        rect.size = NSMakeSize(MIN(1100, visible.size.width * 0.85), MIN(720, visible.size.height * 0.85));
+        rect.origin = NSMakePoint(NSMidX(visible) - rect.size.width / 2, NSMidY(visible) - rect.size.height / 2);
+    }
+    return rect;
+}
+- (void)startSession {
+    if (_quitting || !_ready || _sessionActive) return;
+    NSRunningApplication *frontmost = NSWorkspace.sharedWorkspace.frontmostApplication;
+    if (frontmost.processIdentifier != NSProcessInfo.processInfo.processIdentifier) _previousApp = frontmost;
+    if (![self selectScreen]) return;
+    _sessionActive = YES; _sessionStarted = CACurrentMediaTime();
+    NSUInteger generation = ++_sessionGeneration;
+    bm_startup_mark("capture session requested");
+    bm_camera_reset(&_camera, &_config);
+    _mirror = _flashlight = _help = NO; _dim = 0; _radius = _config.flashlight_radius;
+    _hud.hidden = YES; ++_hudGeneration;
+    [_window setFrame:[_window frameRectForContentRect:[self targetContentRect]] display:NO];
+    if (self.options.delay == 0) [self begin];
+    else dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(self.options.delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (self->_sessionActive && generation == self->_sessionGeneration) [self begin];
+    });
+}
+- (void)dismissSession {
+    BOOL wasActive = NSApp.active;
+    _sessionActive = _shown = NO; ++_sessionGeneration; ++_hudGeneration;
+    _view.paused = YES; _camera.dragging = NO; _camera.velocity = (BMPoint){0};
+    [_capture stop]; [_window orderOut:nil]; _hud.hidden = YES;
+    [_renderer clearImage]; [_view releaseDrawables];
+    if (_pendingFrame) { CVPixelBufferRelease(_pendingFrame); _pendingFrame = NULL; }
+    if (wasActive && _previousApp && !_previousApp.terminated &&
+        _previousApp.processIdentifier != NSProcessInfo.processInfo.processIdentifier)
+        [_previousApp activateWithOptions:0];
+}
+- (void)dismissOrQuit {
+    if (self.options.oneShot) [NSApp terminate:nil]; else [self dismissSession];
+}
+- (BOOL)selectScreen {
+    NSArray<NSScreen *> *screens = NSScreen.screens;
+    if (!screens.count || self.options.displayIndex >= (NSInteger)screens.count) {
+        [self fatal:@"Display index does not exist. Use --list-displays."]; return NO;
+    }
+    _screen = screens.firstObject;
+    if (self.options.displayIndex >= 0) _screen = screens[self.options.displayIndex];
+    else for (NSScreen *s in screens) if (NSPointInRect(NSEvent.mouseLocation, s.frame)) { _screen = s; break; }
+    return YES;
+}
+- (void)applicationWillFinishLaunching:(NSNotification *)notification {
+    (void)notification;
+    bm_startup_mark("AppKit will finish launching");
+    _previousApp = NSWorkspace.sharedWorkspace.frontmostApplication;
+    if (![self selectScreen]) return;
+    // Start the asynchronous capture before AppKit finishes launching and
+    // before building Metal/window resources. Explicit delays still start
+    // after setup, and demo/image rendering stays on the normal path.
+    if (!self.options.background && !self.options.demo && !self.options.imagePath && self.options.delay == 0) {
+        _sessionActive = YES; ++_sessionGeneration; _sessionStarted = CACurrentMediaTime();
+        [self begin];
+    }
+}
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     (void)notification;
-    _previousApp = NSWorkspace.sharedWorkspace.frontmostApplication;
+    bm_startup_mark("AppKit launched");
+    if (!_screen) {
+        _previousApp = NSWorkspace.sharedWorkspace.frontmostApplication;
+        if (![self selectScreen]) return;
+    }
     NSMenu *main = [NSMenu new];
     NSMenuItem *appMenu = [NSMenuItem new]; [main addItem:appMenu];
     appMenu.submenu = [NSMenu new];
+    if (!self.options.oneShot) {
+        NSMenuItem *settings = [[NSMenuItem alloc] initWithTitle:@"Shortcut Settings…" action:@selector(editShortcut:) keyEquivalent:@","];
+        settings.target = self; [appMenu.submenu addItem:settings];
+    }
     NSMenuItem *quit = [[NSMenuItem alloc] initWithTitle:@"Quit Boomer" action:@selector(quit:) keyEquivalent:@"q"];
     quit.target = self; [appMenu.submenu addItem:quit]; NSApp.mainMenu = main;
     _config = bm_config_default();
@@ -219,20 +412,9 @@ static CGImageRef CreateDemoImage(void) {
     if (!_renderer || (self.options.shaderPath && ![_renderer reloadShader:self.options.shaderPath error:&error])) {
         [self fatal:error.localizedDescription]; return;
     }
-    NSArray<NSScreen *> *screens = NSScreen.screens;
-    if (!screens.count || self.options.displayIndex >= (NSInteger)screens.count) {
-        [self fatal:@"Display index does not exist. Use --list-displays."]; return;
-    }
-    _screen = screens.firstObject;
-    if (self.options.displayIndex >= 0) _screen = screens[self.options.displayIndex];
-    else for (NSScreen *s in screens) if (NSPointInRect(NSEvent.mouseLocation, s.frame)) { _screen = s; break; }
+    bm_startup_mark("Metal ready");
     BOOL windowed = self.options.windowed;
-    NSRect rect = _screen.frame;
-    if (windowed) {
-        NSRect visible = _screen.visibleFrame;
-        rect.size = NSMakeSize(MIN(1100, visible.size.width * 0.85), MIN(720, visible.size.height * 0.85));
-        rect.origin = NSMakePoint(NSMidX(visible) - rect.size.width / 2, NSMidY(visible) - rect.size.height / 2);
-    }
+    NSRect rect = [self targetContentRect];
     NSWindowStyleMask style = windowed ? NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable : NSWindowStyleMaskBorderless;
     // NSScreen frames are global, but this initializer adds the supplied
     // screen's origin. Convert once so secondary displays aren't offset twice.
@@ -272,11 +454,22 @@ static CGImageRef CreateDemoImage(void) {
     [_view addSubview:_hud];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(screensChanged:)
         name:NSApplicationDidChangeScreenParametersNotification object:nil];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(self.options.delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (!self->_quitting) [self begin];
-    });
+    [NSWorkspace.sharedWorkspace.notificationCenter addObserver:self selector:@selector(workspaceWillSleep:)
+        name:NSWorkspaceWillSleepNotification object:nil];
+    [NSWorkspace.sharedWorkspace.notificationCenter addObserver:self selector:@selector(workspaceDidWake:)
+        name:NSWorkspaceDidWakeNotification object:nil];
+    _ready = YES;
+    if (!self.options.oneShot) [self installResidentControls];
+    bm_startup_mark("window prepared (hidden)");
+    if (_pendingFrame) {
+        CVPixelBufferRef frame = _pendingFrame; _pendingFrame = NULL;
+        [self captureFrame:frame]; CVPixelBufferRelease(frame);
+    } else if (!_sessionActive && !self.options.background) [self startSession];
+    if (self.options.background) bm_startup_mark("resident ready (hidden)");
 }
 - (void)begin {
+    if (!_sessionActive || _quitting) return;
+    bm_startup_mark("capture requested");
     if (self.options.demo || self.options.imagePath) {
         CGImageRef image = NULL;
         if (self.options.demo) image = CreateDemoImage();
@@ -295,7 +488,7 @@ static CGImageRef CreateDemoImage(void) {
         if (!image) { [self fatal:@"Could not load the image."]; return; }
         [self captureImage:image]; CGImageRelease(image);
     } else {
-        _capture = [BMCapture new]; _capture.delegate = self;
+        if (!_capture) { _capture = [BMCapture new]; _capture.delegate = self; }
         _capture.displayID = [_screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue];
         // ScreenCaptureKit performs its own authorization. A preflight result
         // alone must not prevent us from trying the API we actually use.
@@ -330,19 +523,27 @@ static CGImageRef CreateDemoImage(void) {
     exit(EXIT_FAILURE);
 }
 - (void)captureImage:(CGImageRef)image {
+    if (!_sessionActive || _quitting) return;
+    bm_startup_mark("image received");
     NSError *error = nil;
     if (![_renderer setImage:image error:&error]) { [self captureFailed:error]; return; }
+    bm_startup_mark("image uploaded");
+    [self imageReady];
+}
+- (void)imageReady {
+    if (!_sessionActive || _quitting) return;
     if (!_shown) {
         fprintf(stderr, "Capture ready: %zu x %zu pixels; app=%s\n",
-            CGImageGetWidth(image), CGImageGetHeight(image), NSBundle.mainBundle.bundlePath.fileSystemRepresentation);
-        [self showInitialFrameBefore:CACurrentMediaTime() + 5];
+            (size_t)_renderer.imageSize.width, (size_t)_renderer.imageSize.height,
+            NSBundle.mainBundle.bundlePath.fileSystemRepresentation);
+        [self showInitialFrameBefore:CACurrentMediaTime() + 5 generation:_sessionGeneration];
         return;
     }
     [self toast:@"Screenshot refreshed"];
     [self wake];
 }
-- (void)showInitialFrameBefore:(CFTimeInterval)deadline {
-    if (_quitting || _shown) return;
+- (void)showInitialFrameBefore:(CFTimeInterval)deadline generation:(NSUInteger)generation {
+    if (_quitting || _shown || !_sessionActive || generation != _sessionGeneration) return;
     // Commit real Metal content before exposing the opaque window. Merely
     // uploading the screenshot, or starting the display timer, leaves a black
     // window visible until the GPU and compositor catch up.
@@ -364,37 +565,68 @@ static CGImageRef CreateDemoImage(void) {
         // A drawable can be temporarily unavailable. Keep the window hidden
         // and retry on the main run loop instead of exposing an empty frame.
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC / 60), dispatch_get_main_queue(), ^{
-            [self showInitialFrameBefore:deadline];
+            [self showInitialFrameBefore:deadline generation:generation];
         });
         return;
     }
     _shown = YES;
+    [NSApp unhide:nil];
     [_window makeKeyAndOrderFront:nil]; [_window makeFirstResponder:_view];
     [NSApp activateIgnoringOtherApps:YES];
-    [self toast:@"Scroll / pinch to zoom · Drag to pan · H for help · Esc to quit"];
+    bm_startup_mark("window visible and interactive");
+    if (self.options.traceStartup)
+        fprintf(stderr, "Session ready: %.1f ms\n", (CACurrentMediaTime() - _sessionStarted) * 1000);
+    [self toast:self.options.oneShot ? @"Scroll / pinch to zoom · Drag to pan · H for help · Esc to quit" :
+        [NSString stringWithFormat:@"Scroll / pinch to zoom · Drag to pan · Esc to hide · %@ to capture again",
+            _hotKey ? BMShortcutLabel(_hotKey.keyCode, _hotKey.modifiers) : @"Global shortcut"]];
     if (self.options.live) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 150 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-            if (!self->_quitting) [self->_capture startLive];
+            if (self->_sessionActive && generation == self->_sessionGeneration) [self->_capture startLive];
         });
-    }
+    } else [_capture warmUp];
     if (self.options.quitAfter > 0) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(self.options.quitAfter * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [NSApp terminate:nil]; });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(self.options.quitAfter * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (self->_sessionActive && generation == self->_sessionGeneration) [NSApp terminate:nil];
+        });
     }
     [self wake];
 }
 - (void)captureFrame:(CVPixelBufferRef)buffer {
-    if ([_renderer setPixelBuffer:buffer]) [self wake];
+    if (_quitting || !_sessionActive) return;
+    if (!_view) {
+        // Capture can finish while AppKit is still launching. Keep exactly
+        // one frame alive until the hidden view and renderer are ready.
+        if (_pendingFrame) CVPixelBufferRelease(_pendingFrame);
+        _pendingFrame = CVPixelBufferRetain(buffer);
+        return;
+    }
+    if (!_shown) bm_startup_mark("screenshot buffer received");
+    if (![_renderer setPixelBuffer:buffer]) {
+        [self captureFailed:[NSError errorWithDomain:@"Boomer.Metal" code:1
+            userInfo:@{NSLocalizedDescriptionKey:@"Could not create a Metal texture from the screen capture."}]];
+        return;
+    }
+    if (!_shown) bm_startup_mark("screenshot texture mapped");
+    if (!_capture.live) [self imageReady];
+    else [self wake];
 }
 - (void)captureFailed:(NSError *)error {
     NSString *details = [NSString stringWithFormat:@"%@ (%@, %ld)",
         error.localizedDescription, error.domain, (long)error.code];
     if (!_shown && [error.domain isEqualToString:SCStreamErrorDomain] && error.code == SCStreamErrorUserDeclined) {
-        [self fatal:[NSString stringWithFormat:
+        details = [NSString stringWithFormat:
             @"macOS denied screen capture for this copy of Boomer.\n\n"
              "If Boomer is already enabled in Screen & System Audio Recording, its saved permission may belong to an older build. Remove that Boomer entry, add the app below again, then relaunch.\n\n"
-             "App: %@\n\n%@", NSBundle.mainBundle.bundlePath, details]];
+             "App: %@\n\n%@", NSBundle.mainBundle.bundlePath, details];
     }
-    else if (!_shown) [self fatal:details];
+    if (!_shown) {
+        if (self.options.oneShot || self.options.quitAfter > 0) { [self fatal:details]; return; }
+        [self dismissSession];
+        fprintf(stderr, "Capture: %s\n", details.UTF8String);
+        NSAlert *alert = [NSAlert new]; alert.messageText = @"Boomer could not capture the screen";
+        alert.informativeText = details; [alert addButtonWithTitle:@"OK"];
+        [NSApp activateIgnoringOtherApps:YES]; [alert runModal];
+    }
     else { fprintf(stderr, "Capture: %s\n", error.localizedDescription.UTF8String); [self toast:error.localizedDescription]; }
 }
 - (BMPoint)pointer {
@@ -428,7 +660,7 @@ static CGImageRef CreateDemoImage(void) {
         .mirror = _mirror, .filterMode = _config.filter_mode};
     _frameDrawn = [_renderer drawInView:view uniforms:u];
     // Failed submissions still need a frame even when the camera is idle.
-    // Hidden startup frames are retried explicitly by showInitialFrameBefore:.
+    // Hidden frames are retried explicitly with their session generation.
     view.paused = !_shown || (_frameDrawn && !moving && _dim == desiredDim);
 }
 - (void)mtkView:(MTKView *)view drawableSizeWillChange:(CGSize)size {
@@ -440,7 +672,7 @@ static CGImageRef CreateDemoImage(void) {
     _hud.frame = NSMakeRect(16,16,width,_help ? 162 : 56);
 }
 - (void)showHelp {
-    _hud.stringValue = @"  BOOMER / METAL\n  Scroll · +/- · Pinch    Zoom at cursor\n  Left drag              Pan with inertia\n  F · Ctrl-scroll        Flashlight · Radius\n  M · P · 0              Mirror · Filter · Reset\n  L · Space              Live/freeze · New screenshot\n  R · Ctrl-R             Reload config · Shader\n  H / ? · Q / Esc        Help · Quit";
+    _hud.stringValue = @"  BOOMER / METAL\n  Scroll · +/- · Pinch    Zoom at cursor\n  Left drag              Pan with inertia\n  F · Ctrl-scroll        Flashlight · Radius\n  M · P · 0              Mirror · Filter · Reset\n  L · Space              Live/freeze · New screenshot\n  R · Ctrl-R             Reload config · Shader\n  Esc / Q · Cmd-Q        Hide · Quit (Esc quits with --once)";
     _hud.hidden = NO; [self layoutHUD];
 }
 - (void)toast:(NSString *)message {
@@ -453,7 +685,8 @@ static CGImageRef CreateDemoImage(void) {
 }
 - (void)key:(NSEvent *)event {
     NSString *s = event.charactersIgnoringModifiers.lowercaseString;
-    if (event.keyCode == 53 || [s isEqual:@"q"]) { [NSApp terminate:nil]; return; }
+    if ([s isEqual:@"q"] && (event.modifierFlags & NSEventModifierFlagCommand)) { [NSApp terminate:nil]; return; }
+    if (event.keyCode == 53 || [s isEqual:@"q"]) { [self dismissOrQuit]; return; }
     if ([s isEqual:@"0"]) {
         bm_camera_reset(&_camera, &_config); _mirror = NO; _flashlight = NO;
         _radius = _config.flashlight_radius; [self toast:@"Reset · 1×"];
@@ -521,22 +754,40 @@ static CGImageRef CreateDemoImage(void) {
 }
 - (void)windowDidDeminiaturize:(NSNotification *)notification { (void)notification; [self wake]; }
 - (void)windowDidChangeBackingProperties:(NSNotification *)notification { (void)notification; [self wake]; }
-- (BOOL)windowShouldClose:(NSWindow *)sender { (void)sender; [NSApp terminate:nil]; return NO; }
+- (BOOL)windowShouldClose:(NSWindow *)sender { (void)sender; [self dismissOrQuit]; return NO; }
 - (void)screensChanged:(NSNotification *)notification {
     (void)notification;
+    if (!self.options.oneShot) {
+        if (_sessionActive) [self dismissSession];
+        [_capture invalidate]; return;
+    }
     CGDirectDisplayID displayID = [_screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue];
     NSScreen *found = nil;
     for (NSScreen *s in NSScreen.screens) if ([s.deviceDescription[@"NSScreenNumber"] unsignedIntValue] == displayID) found = s;
     if (!found) { [NSApp terminate:nil]; return; }
     _screen = found;
     if (!self.options.windowed) [_window setFrame:found.frame display:YES];
-    if (_capture.live) { [_capture stop]; [_capture startLive]; }
+    BOOL live = _capture.live;
+    [_capture invalidate];
+    if (live) [_capture startLive];
+    else if (_sessionActive && !_shown) [_capture takeScreenshot];
     [self wake];
 }
+- (void)workspaceWillSleep:(NSNotification *)notification {
+    (void)notification;
+    [self dismissSession]; [_capture invalidate];
+}
+- (void)workspaceDidWake:(NSNotification *)notification {
+    (void)notification; [_capture invalidate];
+}
 - (void)applicationWillTerminate:(NSNotification *)notification {
-    (void)notification; _quitting = YES; _view.paused = YES;
+    (void)notification; _quitting = YES; _ready = NO; _sessionActive = NO; ++_sessionGeneration; _view.paused = YES;
+    [_hotKey unregister];
+    if (_statusItem) { [NSStatusBar.systemStatusBar removeStatusItem:_statusItem]; _statusItem = nil; }
     [_capture stop]; [_window orderOut:nil];
+    if (_pendingFrame) { CVPixelBufferRelease(_pendingFrame); _pendingFrame = NULL; }
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+    [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:self];
     if (_previousApp && !_previousApp.terminated && _previousApp.processIdentifier != NSProcessInfo.processInfo.processIdentifier && NSApp.active)
         [_previousApp activateWithOptions:0];
 }
@@ -544,10 +795,13 @@ static CGImageRef CreateDemoImage(void) {
 @end
 
 int main(int argc, const char **argv) {
+    bm_startup_begin();
     @autoreleasepool {
         int result;
         BMOptions *options = ParseOptions(argc, argv, &result);
         if (!options) return result;
+        bm_startup_trace_enable(options.traceStartup);
+        bm_startup_mark("options parsed");
         if (options.generatedConfigPath) {
             NSString *path = options.generatedConfigPath.stringByExpandingTildeInPath;
             NSError *error = nil;
@@ -571,6 +825,7 @@ int main(int argc, const char **argv) {
             return 0;
         }
         [NSApplication sharedApplication];
+        bm_startup_mark("NSApplication created");
         if (options.listDisplays) {
             NSInteger i = 0;
             for (NSScreen *s in NSScreen.screens) printf("%ld: %s — %.0f × %.0f points, %.1f× Retina, ID %u\n",
@@ -578,7 +833,7 @@ int main(int argc, const char **argv) {
                 [s.deviceDescription[@"NSScreenNumber"] unsignedIntValue]);
             return 0;
         }
-        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+        [NSApp setActivationPolicy:options.oneShot ? NSApplicationActivationPolicyRegular : NSApplicationActivationPolicyAccessory];
         BMController *controller = [BMController new]; controller.options = options;
         NSApp.delegate = controller;
         [NSApp run];

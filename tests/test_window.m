@@ -5,6 +5,29 @@
 #import "../src/main.m"
 #undef main
 
+// Exercise the resident lifecycle without competing for the user's shortcut.
+// Registration and real Carbon event dispatch are covered by test-hotkey.
+@interface BMTestController : BMController
+@end
+@implementation BMTestController
+- (void)installResidentControls {}
+@end
+
+@interface BMCountingCapture : BMCapture
+@property NSUInteger starts, invalidations;
+@end
+@implementation BMCountingCapture
+- (void)startLive { ++self.starts; }
+- (void)warmUp {}
+- (void)invalidate { ++self.invalidations; [super invalidate]; }
+@end
+
+static void RunFor(double seconds) {
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:seconds];
+    while (deadline.timeIntervalSinceNow > 0)
+        [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode beforeDate:deadline];
+}
+
 @interface BMStartupRenderer : BMRenderer
 @property NSUInteger unavailableFrames, startupFrames;
 @property BOOL exposedEmptyWindow;
@@ -49,6 +72,138 @@ static BOOL CheckStartup(BMController *controller) {
     return ready && retriesIdleFrame && pausesAfterSuccess;
 }
 
+static BOOL CheckEarlyCapture(void) {
+    BMOptions *options = [BMOptions new];
+    options.demo = YES;
+    options.displayIndex = 0;
+    options.configPath = @"/dev/null";
+    options.delay = options.quitAfter = 3600;
+    BMController *controller = [BMTestController new]; controller.options = options;
+    [controller setValue:@YES forKey:@"sessionActive"];
+    CVPixelBufferRef buffer = NULL;
+    NSDictionary *attributes = @{(id)kCVPixelBufferIOSurfacePropertiesKey:@{},
+        (id)kCVPixelBufferMetalCompatibilityKey:@YES};
+    if (CVPixelBufferCreate(NULL, 8, 8, kCVPixelFormatType_32BGRA,
+            (__bridge CFDictionaryRef)attributes, &buffer) != kCVReturnSuccess) return NO;
+    CVPixelBufferLockBaseAddress(buffer, 0);
+    memset(CVPixelBufferGetBaseAddress(buffer), 255, CVPixelBufferGetBytesPerRow(buffer) * 8);
+    CVPixelBufferUnlockBaseAddress(buffer, 0);
+    // Simulate capture beating AppKit startup, then ending its callback.
+    [controller captureFrame:buffer]; CVPixelBufferRelease(buffer);
+    [controller applicationDidFinishLaunching:[NSNotification
+        notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp]];
+    BMRenderer *renderer = [controller valueForKey:@"renderer"];
+    NSWindow *window = [controller valueForKey:@"window"];
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:4];
+    while (!window.visible && deadline.timeIntervalSinceNow > 0)
+        [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+    BOOL passed = window.visible && CGSizeEqualToSize(renderer.imageSize, CGSizeMake(8, 8));
+    [controller applicationWillTerminate:[NSNotification
+        notificationWithName:NSApplicationWillTerminateNotification object:NSApp]];
+    fprintf(stderr, "%s capture before window setup: retained and presented after setup\n", passed ? "PASS" : "FAIL");
+    return passed;
+}
+
+static BOOL CheckResidentCycle(BMController *controller) {
+    BMWindow *window = [controller valueForKey:@"window"];
+    BMView *view = [controller valueForKey:@"view"];
+    BMStartupRenderer *renderer = [controller valueForKey:@"renderer"];
+    controller.options.delay = 0;
+    [controller setValue:@YES forKey:@"mirror"];
+    NSEvent *escape = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0
+        timestamp:0 windowNumber:window.windowNumber context:nil characters:@"\033"
+        charactersIgnoringModifiers:@"\033" isARepeat:NO keyCode:53];
+    [controller key:escape];
+    BOOL hidden = !window.visible && view.paused && renderer.imageSize.width == 0 &&
+        ![[controller valueForKey:@"shown"] boolValue] && ![[controller valueForKey:@"sessionActive"] boolValue] &&
+        ![[controller valueForKey:@"quitting"] boolValue];
+    [controller applicationShouldHandleReopen:NSApp hasVisibleWindows:NO];
+    BOOL reused = window == [controller valueForKey:@"window"] && renderer == [controller valueForKey:@"renderer"] &&
+        window.visible && ![[controller valueForKey:@"mirror"] boolValue] && renderer.startupFrames == 2;
+    [controller applicationShouldHandleReopen:NSApp hasVisibleWindows:YES];
+    BOOL noDuplicate = renderer.startupFrames == 2;
+    [controller dismissSession];
+    renderer.unavailableFrames = 2;
+    [controller toggleCapture:nil]; // Waiting for a drawable.
+    [controller toggleCapture:nil]; // Cancel before the scheduled retry.
+    RunFor(0.06);
+    BOOL canceled = !window.visible && view.paused && renderer.startupFrames == 2;
+    renderer.unavailableFrames = 0;
+    [controller toggleCapture:nil];
+    BOOL fresh = window.visible && renderer.startupFrames == 3 && !renderer.exposedEmptyWindow;
+    [controller dismissSession];
+    BMCountingCapture *capture = [BMCountingCapture new];
+    [controller setValue:capture forKey:@"capture"];
+    controller.options.live = YES;
+    [controller startSession]; // Schedule live capture after the first frame.
+    [controller dismissSession];
+    controller.options.live = NO;
+    [controller startSession];
+    RunFor(0.22);
+    BOOL noStaleLive = capture.starts == 0 && window.visible;
+    [controller screensChanged:nil];
+    BOOL screenChange = !window.visible && capture.invalidations == 1 && ![[controller valueForKey:@"quitting"] boolValue];
+    BOOL passed = hidden && reused && noDuplicate && canceled && fresh && noStaleLive && screenChange;
+    fprintf(stderr, "%s resident: hide/reopen, reuse/reset, cancel retry, stale live timer, display invalidation\n", passed ? "PASS" : "FAIL");
+    if (!passed) fprintf(stderr, "  hidden=%d reused=%d duplicate=%d canceled=%d fresh=%d live=%d screens=%d\n",
+        hidden,reused,noDuplicate,canceled,fresh,noStaleLive,screenChange);
+    return passed;
+}
+
+static BOOL CheckBackgroundStartup(void) {
+    BMOptions *options = [BMOptions new];
+    options.demo = options.background = YES; options.displayIndex = 0;
+    options.configPath = @"/dev/null"; options.quitAfter = 3600;
+    BMController *controller = [BMTestController new]; controller.options = options;
+    [controller applicationDidFinishLaunching:[NSNotification
+        notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp]];
+    NSWindow *window = [controller valueForKey:@"window"];
+    BMRenderer *renderer = [controller valueForKey:@"renderer"];
+    BOOL hidden = !window.visible && ![[controller valueForKey:@"sessionActive"] boolValue] && renderer.imageSize.width == 0;
+    [controller toggleCapture:nil];
+    BOOL shown = window.visible;
+    [controller windowShouldClose:window];
+    BOOL stays = !window.visible && ![[controller valueForKey:@"quitting"] boolValue];
+    [controller applicationWillTerminate:[NSNotification
+        notificationWithName:NSApplicationWillTerminateNotification object:NSApp]];
+    fprintf(stderr, "%s background: no initial capture, hotkey opens, close hides\n", hidden && shown && stays ? "PASS" : "FAIL");
+    return hidden && shown && stays;
+}
+
+static BOOL CheckDisplaySwitch(NSArray<NSScreen *> *screens) {
+    BOOL passed = YES;
+    for (int windowed = 0; windowed < 2; ++windowed) {
+        BMOptions *options = [BMOptions new];
+        options.demo = options.background = YES; options.windowed = windowed;
+        options.configPath = @"/dev/null"; options.quitAfter = 3600;
+        BMController *controller = [BMTestController new]; controller.options = options;
+        [controller applicationDidFinishLaunching:[NSNotification
+            notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp]];
+        NSWindow *window = [controller valueForKey:@"window"];
+        BMRenderer *renderer = [controller valueForKey:@"renderer"];
+        for (NSUInteger step = 0; step <= screens.count; ++step) {
+            NSUInteger index = step % screens.count;
+            options.displayIndex = (NSInteger)index;
+            [controller startSession];
+            NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:4];
+            while (!window.visible && deadline.timeIntervalSinceNow > 0)
+                [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+            NSRect content = [window contentRectForFrameRect:window.frame];
+            NSRect expected = windowed ? screens[index].visibleFrame : screens[index].frame;
+            BMView *view = [controller valueForKey:@"view"];
+            passed &= window.visible && window == [controller valueForKey:@"window"] &&
+                renderer == [controller valueForKey:@"renderer"] &&
+                fabs(NSMidX(content) - NSMidX(expected)) <= 1 && fabs(NSMidY(content) - NSMidY(expected)) <= 1 &&
+                NSEqualSizes(view.drawableSize, [view convertRectToBacking:view.bounds].size);
+            [controller dismissSession];
+        }
+        [controller applicationWillTerminate:[NSNotification
+            notificationWithName:NSApplicationWillTerminateNotification object:NSApp]];
+    }
+    fprintf(stderr, "%s resident: same window/renderer moves between displays and back at correct backing scale\n", passed ? "PASS" : "FAIL");
+    return passed;
+}
+
 int main(void) {
     @autoreleasepool {
         [NSApplication sharedApplication];
@@ -59,6 +214,9 @@ int main(void) {
         }
         BOOL testedSecondaryOrigin = NO;
         int failures = 0;
+        if (!CheckEarlyCapture()) ++failures;
+        if (!CheckBackgroundStartup()) ++failures;
+        if (!CheckDisplaySwitch(screens)) ++failures;
         for (NSUInteger index = 0; index < screens.count; ++index) {
             NSScreen *screen = screens[index];
             if (!NSEqualPoints(screen.frame.origin, NSZeroPoint)) testedSecondaryOrigin = YES;
@@ -70,7 +228,7 @@ int main(void) {
                 options.configPath = @"/dev/null";
                 options.delay = 3600; // Inspect geometry before begin/capture.
                 options.quitAfter = 3600; // Fail promptly on errors; don't quit during the test run.
-                BMController *controller = [BMController new];
+                BMController *controller = [BMTestController new];
                 controller.options = options;
                 [controller applicationDidFinishLaunching:[NSNotification
                     notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp]];
@@ -96,6 +254,7 @@ int main(void) {
                     NSStringFromRect(expected).UTF8String, NSStringFromRect(content).UTF8String);
                 if (!matches) ++failures;
                 if (!CheckStartup(controller)) ++failures;
+                if (!CheckResidentCycle(controller)) ++failures;
                 [controller applicationWillTerminate:[NSNotification
                     notificationWithName:NSApplicationWillTerminateNotification object:NSApp]];
             }

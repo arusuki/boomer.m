@@ -19,6 +19,8 @@ expect_fail --display 1.5
 expect_fail --image
 expect_fail --live --demo
 expect_fail --demo --image x.png
+expect_fail --background --once
+expect_fail --background --quit-after 1
 "$bin" --new-config "$tmp/config"
 cp "$tmp/config" "$tmp/original"
 expect_fail --new-config "$tmp/config"

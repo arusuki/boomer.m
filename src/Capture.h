@@ -1,7 +1,7 @@
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 
 @protocol BMCaptureDelegate <NSObject>
-- (void)captureImage:(CGImageRef)image;
+// Both still screenshots and live frames use an IOSurface-backed buffer.
 - (void)captureFrame:(CVPixelBufferRef)buffer;
 - (void)captureFailed:(NSError *)error;
 @end
@@ -13,5 +13,9 @@
 @property(nonatomic, readonly) BOOL live;
 - (void)takeScreenshot;
 - (void)startLive;
+// Prepare reusable self-excluding filters while visible; does not capture.
+- (void)warmUp;
+// Stop in-flight work and discard cached display/filter information.
+- (void)invalidate;
 - (void)stop;
 @end

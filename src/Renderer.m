@@ -1,4 +1,5 @@
 #import "Renderer.h"
+#include "Timing.h"
 #include "Shaders.inc"
 
 static NSError *BMRenderError(NSString *message) {
@@ -16,6 +17,7 @@ static NSError *BMRenderError(NSString *message) {
 - (instancetype)initWithError:(NSError **)error {
     if (!(self = [super init])) return nil;
     _device = MTLCreateSystemDefaultDevice();
+    bm_startup_mark("Metal device created");
     if (!_device) { if (error) *error = BMRenderError(@"No Metal device available."); return nil; }
     _queue = [_device newCommandQueue];
     _inflight = dispatch_semaphore_create(3);
@@ -33,6 +35,7 @@ static NSError *BMRenderError(NSString *message) {
 }
 - (BOOL)compileSource:(NSString *)source error:(NSError **)error {
     id<MTLLibrary> library = [_device newLibraryWithSource:source options:nil error:error];
+    bm_startup_mark("Metal library compiled");
     if (!library) return NO;
     MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
     d.vertexFunction = [library newFunctionWithName:@"fullscreenVertex"];
@@ -42,6 +45,7 @@ static NSError *BMRenderError(NSString *message) {
         if (error) *error = BMRenderError(@"Shader must define fullscreenVertex and screenFragment."); return NO;
     }
     id<MTLRenderPipelineState> next = [_device newRenderPipelineStateWithDescriptor:d error:error];
+    bm_startup_mark("Metal pipeline created");
     if (!next) return NO;
     _pipeline = next; return YES;
 }
@@ -50,6 +54,12 @@ static NSError *BMRenderError(NSString *message) {
     return s && [self compileSource:s error:error];
 }
 - (CGSize)imageSize { return CGSizeMake(_texture.width, _texture.height); }
+- (void)clearImage {
+    _texture = nil;
+    if (_videoTexture) { CFRelease(_videoTexture); _videoTexture = NULL; }
+    if (_pixelBuffer) { CVPixelBufferRelease(_pixelBuffer); _pixelBuffer = NULL; }
+    CVMetalTextureCacheFlush(_cache, 0);
+}
 - (BOOL)setImage:(CGImageRef)image error:(NSError **)error {
     size_t w = CGImageGetWidth(image), h = CGImageGetHeight(image);
     if (!w || !h || w > 16384 || h > 16384) {
@@ -193,17 +203,36 @@ static NSError *BMRenderError(NSString *message) {
     }
     return YES;
 }
-- (BOOL)selfTest:(NSError **)error {
+- (BOOL)selfTestImageSource:(BOOL)usePixelBuffer error:(NSError **)error {
     // Asymmetric 2×2 fixture catches flips, mirroring, channel swaps and shader ABI issues.
     uint8_t pixels[] = {0,0,255,255, 0,255,0,255, 255,0,0,255, 255,255,255,255};
-    CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-    CGContextRef ctx = CGBitmapContextCreate(pixels, 2, 2, 8, 8, space,
-        kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
-    CGColorSpaceRelease(space);
-    CGImageRef image = CGBitmapContextCreateImage(ctx);
-    BOOL loaded = [self setImage:image error:error];
-    CGImageRelease(image); CGContextRelease(ctx);
-    if (!loaded) return NO;
+    if (usePixelBuffer) {
+        CVPixelBufferRef buffer = NULL;
+        NSDictionary *attributes = @{(id)kCVPixelBufferIOSurfacePropertiesKey:@{},
+            (id)kCVPixelBufferMetalCompatibilityKey:@YES};
+        if (CVPixelBufferCreate(NULL, 2, 2, kCVPixelFormatType_32BGRA,
+                (__bridge CFDictionaryRef)attributes, &buffer) != kCVReturnSuccess) {
+            if (error) *error = BMRenderError(@"Could not allocate capture buffer test input."); return NO;
+        }
+        CVPixelBufferLockBaseAddress(buffer, 0);
+        uint8_t *base = CVPixelBufferGetBaseAddress(buffer);
+        size_t stride = CVPixelBufferGetBytesPerRow(buffer);
+        for (size_t row = 0; row < 2; ++row) memcpy(base + row * stride, pixels + row * 8, 8);
+        CVPixelBufferUnlockBaseAddress(buffer, 0);
+        BOOL loaded = [self setPixelBuffer:buffer];
+        // Rendering must retain the IOSurface after the capture callback ends.
+        CVPixelBufferRelease(buffer);
+        if (!loaded) { if (error) *error = BMRenderError(@"Could not map capture buffer test input."); return NO; }
+    } else {
+        CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        CGContextRef ctx = CGBitmapContextCreate(pixels, 2, 2, 8, 8, space,
+            kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+        CGColorSpaceRelease(space);
+        CGImageRef image = CGBitmapContextCreateImage(ctx);
+        BOOL loaded = [self setImage:image error:error];
+        CGImageRelease(image); CGContextRelease(ctx);
+        if (!loaded) return NO;
+    }
     MTLTextureDescriptor *desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:8 height:8 mipmapped:NO];
     desc.usage = MTLTextureUsageRenderTarget;
     desc.storageMode = MTLStorageModeShared;
@@ -236,6 +265,10 @@ static NSError *BMRenderError(NSString *message) {
             }
         }
     }
-    return [self selfTestFiltering:error];
+    return YES;
+}
+- (BOOL)selfTest:(NSError **)error {
+    return [self selfTestImageSource:NO error:error] &&
+        [self selfTestImageSource:YES error:error] && [self selfTestFiltering:error];
 }
 @end
