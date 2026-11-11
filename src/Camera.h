@@ -3,7 +3,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-typedef struct { double x, y; } BMPoint;
+typedef struct {
+    double x, y;
+} BMPoint;
 typedef enum { BMFilterNearest, BMFilterLinear, BMFilterBicubic } BMFilterMode;
 typedef struct {
     double min_scale, max_scale, scroll_speed, drag_friction, scale_friction;

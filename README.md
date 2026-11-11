@@ -124,6 +124,18 @@ filter_mode = 2
 
 ## 开发与验证
 
+格式化和静态检查使用 **LLVM 20** 的 `clang-format` / `clang-tidy`，配置分别保存在仓库根目录的 `.clang-format` 和 `.clang-tidy`。Homebrew 安装方式：
+
+```sh
+brew install llvm@20
+export PATH="$(brew --prefix llvm@20)/bin:$PATH"
+make format       # 格式化 src/、tests/ 中的 C、Objective-C、头文件和 Metal 源码
+make format-check # 只检查格式，不改文件
+make lint         # 检查 C / Objective-C 源码及其头文件，警告视为错误
+```
+
+也可用 `CLANG_FORMAT=/path/to/clang-format`、`CLANG_TIDY=/path/to/clang-tidy` 指定工具路径。lint 自动使用当前 macOS SDK，检查应用源码和测试代码；Metal shader 由下面的 GPU 测试实际编译与验证。
+
 ```sh
 make test       # C 相机/配置测试（ASan + UBSan）及 CLI 测试
 make test-gpu   # 实际 GPU 离屏渲染：方向、颜色、镜像、聚光灯、缩放、插值与边缘
@@ -134,7 +146,7 @@ make test-capture # 模拟系统回调，测试缓存、缓冲生命周期、取
 ./build/boomer --shader src/Shaders.metal --demo --windowed
 ```
 
-`--quit-after` 在首帧就绪并显示窗口后计时，用于 GUI 冒烟测试；收起会取消这一会话的定时退出，不能与 `--background` 同用。错误 shader 不会替换正在使用的管线。`make check` 运行全部自动化测试，GPU、窗口和热键测试需要本地用户会话。GPU 测试覆盖 CGImage 和 IOSurface 截图缓冲区的方向、颜色与生命周期。窗口测试覆盖各显示器和两种窗口模式、首帧隐藏与重试，以及常驻隐藏/重新打开、资源复用、状态重置、取消旧回调、延迟实时捕获和后台启动。连接第二个显示器可验证非零原点，单屏时会提示该覆盖范围缺失。
+`--quit-after` 在首帧就绪并显示窗口后计时，用于 GUI 冒烟测试；收起会取消这一会话的定时退出，不能与 `--background` 同用。错误 shader 不会替换正在使用的管线。`make check` 运行格式检查、lint 和全部自动化测试，GPU、窗口和热键测试需要本地用户会话。GPU 测试覆盖 CGImage 和 IOSurface 截图缓冲区的方向、颜色与生命周期。窗口测试覆盖各显示器和两种窗口模式、首帧隐藏与重试，以及常驻隐藏/重新打开、资源复用、状态重置、取消旧回调、延迟实时捕获和后台启动。连接第二个显示器可验证非零原点，单屏时会提示该覆盖范围缺失。
 
 已在 Apple M1 / macOS 15.7.3 上通过严格编译、Clang 静态分析、ASan / UBSan、CLI 和 Metal 离屏测试；已实际检查演示画面、拖拽、缩放、镜像、聚光灯、真实桌面截图、实时捕获、冻结、刷新和退出。双屏启动位置已通过实际 AppKit 窗口回归测试，覆盖主屏、副屏及两种窗口模式。Intel Mac、显示器热插拔及触控板捏合尚未做硬件实测。
 

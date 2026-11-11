@@ -1,0 +1,14 @@
+# macOS does not provide the optional C11 Annex K *_s functions.
+# C/Objective-C APIs intentionally use adjacent parameters of the same type.
+# Keep opt-in checks disabled: they flag valid Apple option bitmasks and require localization.
+Checks: >-
+  -*,
+  clang-analyzer-*,
+  -clang-analyzer-optin.*,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  objc-*
+WarningsAsErrors: '*'
+HeaderFilterRegex: '(^|/)(src|tests)/'
+FormatStyle: file

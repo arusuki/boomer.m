@@ -1,0 +1,10 @@
+# Use clang-format 20 for reproducible output.
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 100
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+ObjCBlockIndentWidth: 4
+PointerAlignment: Right
+SortIncludes: Never

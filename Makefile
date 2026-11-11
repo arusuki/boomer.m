@@ -11,8 +11,14 @@ OBJCFLAGS := $(CFLAGS) -fobjc-arc
 FRAMEWORKS := -framework Cocoa -framework Metal -framework MetalKit -framework QuartzCore \
               -framework ScreenCaptureKit -framework CoreMedia -framework CoreVideo -framework ImageIO -framework Carbon
 OBJECTS := $(BUILD)/Camera.o $(BUILD)/Timing.o $(BUILD)/Renderer.o $(BUILD)/Capture.o $(BUILD)/HotKey.o $(BUILD)/ShortcutSettings.o $(BUILD)/main.o
+CLANG_FORMAT ?= clang-format
+CLANG_TIDY ?= clang-tidy
+SDKROOT ?= $(shell xcrun --show-sdk-path)
+LINT_C_SOURCES := $(wildcard src/*.c tests/*.c)
+LINT_OBJC_SOURCES := $(wildcard src/*.m tests/*.m)
+FORMAT_SOURCES := $(sort $(wildcard src/*.c src/*.h src/*.m src/*.metal tests/*.c tests/*.h tests/*.m))
 
-.PHONY: all app run demo setup-signing test test-gpu test-window test-hotkey test-capture check clean
+.PHONY: all app run demo setup-signing format format-check lint test test-gpu test-window test-hotkey test-capture check clean
 all: $(TARGET) app
 
 $(BUILD):
@@ -42,6 +48,16 @@ run: app
 demo: app
 	open $(APP) --args --demo --windowed
 
+format:
+	$(CLANG_FORMAT) --style=file --fail-on-incomplete-format -i $(FORMAT_SOURCES)
+
+format-check:
+	$(CLANG_FORMAT) --style=file --fail-on-incomplete-format --dry-run --Werror $(FORMAT_SOURCES)
+
+lint: $(BUILD)/Shaders.inc
+	$(CLANG_TIDY) $(LINT_C_SOURCES) -- $(CPPFLAGS) $(CFLAGS) -isysroot "$(SDKROOT)"
+	$(CLANG_TIDY) $(LINT_OBJC_SOURCES) -- $(CPPFLAGS) $(OBJCFLAGS) -isysroot "$(SDKROOT)"
+
 $(BUILD)/test-camera: tests/test_camera.c src/Camera.c src/Camera.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -fsanitize=address,undefined tests/test_camera.c src/Camera.c -o $@
 
@@ -70,7 +86,7 @@ $(BUILD)/test-capture: tests/test_capture.m src/Capture.m src/Capture.h $(BUILD)
 test-capture: $(BUILD)/test-capture
 	$(BUILD)/test-capture
 
-check: test test-gpu test-window test-hotkey test-capture
+check: format-check lint test test-gpu test-window test-hotkey test-capture
 
 clean:
 	rm -rf $(BUILD)
