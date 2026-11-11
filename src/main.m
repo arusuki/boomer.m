@@ -196,7 +196,7 @@ static CGImageRef CreateDemoImage(void) {
     NSTextField *_hud;
     BMConfig _config;
     BMCamera _camera;
-    BOOL _mirror, _flashlight, _help, _shown, _quitting;
+    BOOL _mirror, _flashlight, _help, _shown, _quitting, _frameDrawn;
     double _radius, _dim, _lastFrame, _lastDrag;
     BMPoint _dragPoint;
     NSUInteger _hudGeneration;
@@ -240,6 +240,7 @@ static CGImageRef CreateDemoImage(void) {
     _window = [[BMWindow alloc] initWithContentRect:localRect styleMask:style backing:NSBackingStoreBuffered defer:NO screen:_screen];
     _window.title = @"Boomer — Metal"; _window.delegate = self;
     _window.releasedWhenClosed = NO;
+    _window.animationBehavior = NSWindowAnimationBehaviorNone;
     _window.backgroundColor = NSColor.blackColor;
     _window.acceptsMouseMovedEvents = YES;
     _window.minSize = NSMakeSize(480,320);
@@ -334,19 +335,51 @@ static CGImageRef CreateDemoImage(void) {
     if (!_shown) {
         fprintf(stderr, "Capture ready: %zu x %zu pixels; app=%s\n",
             CGImageGetWidth(image), CGImageGetHeight(image), NSBundle.mainBundle.bundlePath.fileSystemRepresentation);
-        _shown = YES;
-        [_window makeKeyAndOrderFront:nil]; [_window makeFirstResponder:_view];
-        [NSApp activateIgnoringOtherApps:YES];
-        [self toast:@"Scroll / pinch to zoom · Drag to pan · H for help · Esc to quit"];
-        if (self.options.live) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 150 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                if (!self->_quitting) [self->_capture startLive];
-            });
+        [self showInitialFrameBefore:CACurrentMediaTime() + 5];
+        return;
+    }
+    [self toast:@"Screenshot refreshed"];
+    [self wake];
+}
+- (void)showInitialFrameBefore:(CFTimeInterval)deadline {
+    if (_quitting || _shown) return;
+    // Commit real Metal content before exposing the opaque window. Merely
+    // uploading the screenshot, or starting the display timer, leaves a black
+    // window visible until the GPU and compositor catch up.
+    [_view layoutSubtreeIfNeeded];
+    _view.drawableSize = [_view convertRectToBacking:_view.bounds].size;
+    _view.presentsWithTransaction = YES;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    _frameDrawn = NO;
+    _lastFrame = CACurrentMediaTime();
+    [_view draw];
+    [CATransaction commit];
+    [CATransaction flush];
+    _view.presentsWithTransaction = NO;
+    if (!_frameDrawn) {
+        if (CACurrentMediaTime() >= deadline) {
+            [self fatal:@"Could not render the first frame."]; return;
         }
-        if (self.options.quitAfter > 0) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(self.options.quitAfter * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [NSApp terminate:nil]; });
-        }
-    } else [self toast:@"Screenshot refreshed"];
+        // A drawable can be temporarily unavailable. Keep the window hidden
+        // and retry on the main run loop instead of exposing an empty frame.
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC / 60), dispatch_get_main_queue(), ^{
+            [self showInitialFrameBefore:deadline];
+        });
+        return;
+    }
+    _shown = YES;
+    [_window makeKeyAndOrderFront:nil]; [_window makeFirstResponder:_view];
+    [NSApp activateIgnoringOtherApps:YES];
+    [self toast:@"Scroll / pinch to zoom · Drag to pan · H for help · Esc to quit"];
+    if (self.options.live) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 150 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+            if (!self->_quitting) [self->_capture startLive];
+        });
+    }
+    if (self.options.quitAfter > 0) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(self.options.quitAfter * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [NSApp terminate:nil]; });
+    }
     [self wake];
 }
 - (void)captureFrame:(CVPixelBufferRef)buffer {
@@ -377,6 +410,7 @@ static CGImageRef CreateDemoImage(void) {
     _view.paused = NO;
 }
 - (void)drawInMTKView:(MTKView *)view {
+    _frameDrawn = NO;
     double now = CACurrentMediaTime(), dt = fmin(0.1, fmax(0, now - _lastFrame)); _lastFrame = now;
     BOOL moving = bm_camera_step(&_camera, &_config, dt);
     double desiredDim = _flashlight ? _config.flashlight_dim : 0;
@@ -392,8 +426,10 @@ static CGImageRef CreateDemoImage(void) {
         .cursor = {(float)pointer.x,(float)pointer.y}, .scale = (float)_camera.scale,
         .radius = (float)(_radius * _camera.scale), .dim = (float)_dim,
         .mirror = _mirror, .filterMode = _config.filter_mode};
-    [_renderer drawInView:view uniforms:u];
-    view.paused = !moving && _dim == desiredDim;
+    _frameDrawn = [_renderer drawInView:view uniforms:u];
+    // Failed submissions still need a frame even when the camera is idle.
+    // Hidden startup frames are retried explicitly by showInitialFrameBefore:.
+    view.paused = !_shown || (_frameDrawn && !moving && _dim == desiredDim);
 }
 - (void)mtkView:(MTKView *)view drawableSizeWillChange:(CGSize)size {
     (void)view; (void)size;

@@ -92,12 +92,13 @@ static NSError *BMRenderError(NSString *message) {
     [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [encoder endEncoding];
 }
-- (void)drawInView:(MTKView *)view uniforms:(BMUniforms)uniforms {
-    if (!_texture || dispatch_semaphore_wait(_inflight, DISPATCH_TIME_NOW)) return;
+- (BOOL)drawInView:(MTKView *)view uniforms:(BMUniforms)uniforms {
+    if (!_texture || dispatch_semaphore_wait(_inflight, DISPATCH_TIME_NOW)) return NO;
     MTLRenderPassDescriptor *pass = view.currentRenderPassDescriptor;
     id<CAMetalDrawable> drawable = view.currentDrawable;
-    if (!pass || !drawable) { dispatch_semaphore_signal(_inflight); return; }
+    if (!pass || !drawable) { dispatch_semaphore_signal(_inflight); return NO; }
     id<MTLCommandBuffer> commands = [_queue commandBuffer];
+    if (!commands) { dispatch_semaphore_signal(_inflight); return NO; }
     // Keep the IOSurface and its CV wrapper alive until GPU sampling completes.
     CVPixelBufferRef buffer = _pixelBuffer ? CVPixelBufferRetain(_pixelBuffer) : NULL;
     CVMetalTextureRef video = _videoTexture ? (CVMetalTextureRef)CFRetain(_videoTexture) : NULL;
@@ -109,8 +110,20 @@ static NSError *BMRenderError(NSString *message) {
         dispatch_semaphore_signal(semaphore);
     }];
     [self encode:commands pass:pass uniforms:uniforms];
+    if (view.presentsWithTransaction) {
+        // Prepare the first frame while the window is still hidden. Present
+        // directly on this thread so it joins the caller's CA transaction.
+        // GPU completion alone (or presentDrawable:) does not commit that
+        // transaction to the window compositor.
+        [commands commit];
+        [commands waitUntilCompleted];
+        if (commands.status != MTLCommandBufferStatusCompleted) return NO;
+        [drawable present];
+        return YES;
+    }
     [commands presentDrawable:drawable];
     [commands commit];
+    return YES;
 }
 - (BOOL)selfTestFiltering:(NSError **)error {
     // Mid-gray steps expose cubic overshoot that a black/white fixture would

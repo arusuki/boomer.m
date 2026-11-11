@@ -1,8 +1,53 @@
 // Exercise the actual startup path, including its screen-relative AppKit
-// initializer. No screenshot permission or visible windows are required.
+// initializer and first-frame presentation. No screenshot permission is needed;
+// startup checks briefly display the demo card on each connected screen.
 #define main boomer_main
 #import "../src/main.m"
 #undef main
+
+@interface BMStartupRenderer : BMRenderer
+@property NSUInteger unavailableFrames, startupFrames;
+@property BOOL exposedEmptyWindow;
+@end
+@implementation BMStartupRenderer
+- (BOOL)drawInView:(MTKView *)view uniforms:(BMUniforms)uniforms {
+    if (view.presentsWithTransaction && view.window.visible) self.exposedEmptyWindow = YES;
+    if (self.unavailableFrames) { --self.unavailableFrames; return NO; }
+    BOOL drawn = [super drawInView:view uniforms:uniforms];
+    if (drawn && view.presentsWithTransaction) ++self.startupFrames;
+    return drawn;
+}
+@end
+
+static BOOL CheckStartup(BMController *controller) {
+    BMWindow *window = [controller valueForKey:@"window"];
+    BMView *view = [controller valueForKey:@"view"];
+    NSError *error = nil;
+    BMStartupRenderer *renderer = [[BMStartupRenderer alloc] initWithError:&error];
+    if (!renderer) { fprintf(stderr, "FAIL startup renderer: %s\n", error.localizedDescription.UTF8String); return NO; }
+    [controller setValue:renderer forKey:@"renderer"];
+    // Simulate temporary drawable starvation. Startup must remain hidden and
+    // retry even though the camera is idle and the display timer is paused.
+    renderer.unavailableFrames = 2;
+    [controller begin];
+    BOOL hiddenUntilReady = !window.visible && ![[controller valueForKey:@"shown"] boolValue];
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:4];
+    while (!window.visible && deadline.timeIntervalSinceNow > 0)
+        [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+    NSSize expected = [view convertRectToBacking:view.bounds].size;
+    BOOL ready = hiddenUntilReady && window.visible && renderer.startupFrames == 1 &&
+        !renderer.exposedEmptyWindow && !view.presentsWithTransaction &&
+        NSEqualSizes(view.drawableSize, expected);
+    // Once shown, a skipped idle frame must keep drawing until it succeeds.
+    renderer.unavailableFrames = 1;
+    [view draw];
+    BOOL retriesIdleFrame = !view.paused;
+    [view draw];
+    BOOL pausesAfterSuccess = view.paused;
+    fprintf(stderr, "%s first frame: hidden until rendered, backing pixels, retry, then idle\n",
+        ready && retriesIdleFrame && pausesAfterSuccess ? "PASS" : "FAIL");
+    return ready && retriesIdleFrame && pausesAfterSuccess;
+}
 
 int main(void) {
     @autoreleasepool {
@@ -24,7 +69,7 @@ int main(void) {
                 options.displayIndex = (NSInteger)index;
                 options.configPath = @"/dev/null";
                 options.delay = 3600; // Inspect geometry before begin/capture.
-                options.quitAfter = 1; // Fail promptly if Metal initialization fails.
+                options.quitAfter = 3600; // Fail promptly on errors; don't quit during the test run.
                 BMController *controller = [BMController new];
                 controller.options = options;
                 [controller applicationDidFinishLaunching:[NSNotification
@@ -50,6 +95,7 @@ int main(void) {
                     screen.localizedName.UTF8String, windowed ? "windowed" : "overlay",
                     NSStringFromRect(expected).UTF8String, NSStringFromRect(content).UTF8String);
                 if (!matches) ++failures;
+                if (!CheckStartup(controller)) ++failures;
                 [controller applicationWillTerminate:[NSNotification
                     notificationWithName:NSApplicationWillTerminateNotification object:NSApp]];
             }
