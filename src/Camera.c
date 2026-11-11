@@ -10,7 +10,7 @@ static double clamp(double v, double lo, double hi) { return fmin(hi, fmax(lo, v
 BMConfig bm_config_default(void) {
     return (BMConfig){ .min_scale = 0.01, .max_scale = 64, .scroll_speed = 1.5,
         .drag_friction = 6, .scale_friction = 12, .flashlight_radius = 200,
-        .flashlight_dim = 0.8, .linear_filter = false };
+        .flashlight_dim = 0.8, .filter_mode = BMFilterBicubic };
 }
 static char *trim(char *s) {
     while (isspace((unsigned char)*s)) ++s;
@@ -24,6 +24,7 @@ bool bm_config_load(const char *path, BMConfig *out, char *error, size_t capacit
     if (!f) { snprintf(error, capacity, "%s: %s", path, strerror(errno)); return false; }
     BMConfig next = bm_config_default();
     char line[1024]; unsigned number = 0; const char *reason = NULL;
+    bool explicit_filter = false;
     while (fgets(line, sizeof line, f)) {
         ++number;
         if (!strchr(line, '\n') && !feof(f)) { reason = "line too long"; break; }
@@ -43,8 +44,14 @@ bool bm_config_load(const char *path, BMConfig *out, char *error, size_t capacit
         else if (!strcmp(key, "scale_friction")) next.scale_friction = v;
         else if (!strcmp(key, "flashlight_radius")) next.flashlight_radius = v;
         else if (!strcmp(key, "flashlight_dim")) next.flashlight_dim = v;
-        else if (!strcmp(key, "linear_filter") && (v == 0 || v == 1)) next.linear_filter = v != 0;
-        else { reason = "unknown key or invalid linear_filter (use 0 or 1)"; break; }
+        else if (!strcmp(key, "filter_mode")) {
+            if (v != 0 && v != 1 && v != 2) { reason = "filter_mode must be 0, 1 or 2"; break; }
+            next.filter_mode = (BMFilterMode)v;
+            explicit_filter = true;
+        } else if (!strcmp(key, "linear_filter")) {
+            if (v != 0 && v != 1) { reason = "linear_filter must be 0 or 1"; break; }
+            if (!explicit_filter) next.filter_mode = v == 0 ? BMFilterNearest : BMFilterLinear;
+        } else { reason = "unknown key"; break; }
     }
     if (ferror(f)) reason = "read failed";
     fclose(f);

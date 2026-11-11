@@ -67,17 +67,29 @@ static void test_config(void) {
     char path[] = "/tmp/boomer-config-test-XXXXXX";
     int fd = mkstemp(path); assert(fd >= 0); close(fd);
     char error[1400]; BMConfig cfg = bm_config_default();
+    assert(cfg.filter_mode == BMFilterBicubic);
     write_config(path, " # comment\nmin_scale = 0.1\nscroll_speed = 2 # inline\nlinear_filter = 1\n");
     assert(bm_config_load(path, &cfg, error, sizeof error));
-    assert(cfg.min_scale == 0.1 && cfg.scroll_speed == 2 && cfg.linear_filter);
+    assert(cfg.min_scale == 0.1 && cfg.scroll_speed == 2 && cfg.filter_mode == BMFilterLinear);
     const char *invalid[] = {"min_scale", "min_scale = nan", "scale_friction = 0", "max_scale = 0.5",
         "min_scale = 2", "linear_filter = 2", "unknown = 1", "min_scale = 0.5junk", "scroll_speed = -1",
-        "flashlight_dim = 1.5", "drag_friction = inf", "min_scale = "};
+        "flashlight_dim = 1.5", "drag_friction = inf", "min_scale = ",
+        "filter_mode = -1", "filter_mode = 3", "filter_mode = 1.5", "filter_mode = nan"};
     for (size_t i = 0; i < sizeof invalid / sizeof *invalid; ++i) {
         write_config(path, invalid[i]);
         assert(!bm_config_load(path, &cfg, error, sizeof error));
-        assert(cfg.min_scale == 0.1 && cfg.scroll_speed == 2); // Atomic failure.
+        assert(cfg.min_scale == 0.1 && cfg.scroll_speed == 2 && cfg.filter_mode == BMFilterLinear); // Atomic failure.
         assert(strstr(error, path));
+    }
+    const char *filters[] = {"linear_filter = 0", "linear_filter = 1", "filter_mode = 2",
+        "filter_mode = 0", "filter_mode = 1", "linear_filter = 0\nfilter_mode = 2",
+        "filter_mode = 2\nlinear_filter = 0", "# default"};
+    const BMFilterMode expected[] = {BMFilterNearest, BMFilterLinear, BMFilterBicubic,
+        BMFilterNearest, BMFilterLinear, BMFilterBicubic, BMFilterBicubic, BMFilterBicubic};
+    for (size_t i = 0; i < sizeof filters / sizeof *filters; ++i) {
+        write_config(path, filters[i]);
+        assert(bm_config_load(path, &cfg, error, sizeof error));
+        assert(cfg.filter_mode == expected[i]);
     }
     unlink(path);
     assert(!bm_config_load(path, &cfg, error, sizeof error));

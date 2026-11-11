@@ -11,7 +11,8 @@ static const char *DefaultConfig =
     "# Boomer.m — ~/.config/boomer/config (or $XDG_CONFIG_HOME/boomer/config)\n"
     "min_scale = 0.01\nmax_scale = 64\nscroll_speed = 1.5\n"
     "drag_friction = 6\nscale_friction = 12\n"
-    "flashlight_radius = 200\nflashlight_dim = 0.8\nlinear_filter = 0\n";
+    "flashlight_radius = 200\nflashlight_dim = 0.8\n"
+    "# 0 = nearest, 1 = linear, 2 = bicubic (smooth text)\nfilter_mode = 2\n";
 
 @interface BMOptions : NSObject
 @property BOOL windowed, demo, live, selfTest, listDisplays;
@@ -42,7 +43,7 @@ static void Usage(void) {
          "Controls: wheel / +/- / pinch = zoom at pointer, left drag = pan\n"
          "          0 = reset, M = mirror, F = flashlight, Ctrl-wheel = radius\n"
          "          R = reload config, L = live/freeze, Space = refresh screenshot\n"
-         "          P = nearest/linear filtering, H / ? = help, Q / Esc = quit");
+         "          P = nearest/linear/bicubic filtering, H / ? = help, Q / Esc = quit");
 }
 static BOOL ParseNumber(NSString *s, double lo, double hi, double *out) {
     const char *raw = s.UTF8String; char *end;
@@ -390,7 +391,7 @@ static CGImageRef CreateDemoImage(void) {
         .imageSize = {(float)(image.width * fit),(float)(image.height * fit)},
         .cursor = {(float)pointer.x,(float)pointer.y}, .scale = (float)_camera.scale,
         .radius = (float)(_radius * _camera.scale), .dim = (float)_dim,
-        .mirror = _mirror, .linearFilter = _config.linear_filter};
+        .mirror = _mirror, .filterMode = _config.filter_mode};
     [_renderer drawInView:view uniforms:u];
     view.paused = !moving && _dim == desiredDim;
 }
@@ -422,7 +423,11 @@ static CGImageRef CreateDemoImage(void) {
         _radius = _config.flashlight_radius; [self toast:@"Reset · 1×"];
     } else if ([s isEqual:@"m"]) { _mirror = !_mirror; [self toast:_mirror ? @"Mirror on" : @"Mirror off"]; }
     else if ([s isEqual:@"f"]) { _flashlight = !_flashlight; [self toast:_flashlight ? @"Flashlight on · Ctrl-scroll adjusts radius" : @"Flashlight off"]; }
-    else if ([s isEqual:@"p"]) { _config.linear_filter = !_config.linear_filter; [self toast:_config.linear_filter ? @"Linear filtering" : @"Nearest-pixel filtering"]; }
+    else if ([s isEqual:@"p"]) {
+        _config.filter_mode = (BMFilterMode)((_config.filter_mode + 1) % 3);
+        NSArray<NSString *> *names = @[@"Nearest-pixel filtering", @"Linear filtering", @"Bicubic filtering · Smooth text"];
+        [self toast:names[_config.filter_mode]];
+    }
     else if ([s isEqual:@"h"] || [s isEqual:@"?"] || [event.characters isEqual:@"?"]) {
         _help = !_help; ++_hudGeneration;
         if (_help) [self showHelp]; else _hud.hidden = YES;
@@ -526,7 +531,7 @@ int main(int argc, const char **argv) {
             if (!renderer || ![renderer selfTest:&error]) {
                 fprintf(stderr, "Metal self-test failed: %s\n", error.localizedDescription.UTF8String); return 1;
             }
-            printf("Metal self-test passed: %s (orientation, color, mirror, dimming, zoom)\n", renderer.device.name.UTF8String);
+            printf("Metal self-test passed: %s (orientation, color, mirror, dimming, zoom, filtering, alpha)\n", renderer.device.name.UTF8String);
             return 0;
         }
         [NSApplication sharedApplication];

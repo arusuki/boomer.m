@@ -5,7 +5,7 @@
 typedef struct {
     vector_float2 viewport, offset, imageSize, cursor;
     float scale, radius, dim, mirror;
-    float linearFilter, padding0, padding1, padding2;
+    float filterMode, padding0, padding1, padding2;
 } BMUniforms;
 _Static_assert(sizeof(BMUniforms) == 64, "Metal uniform layout mismatch");
 

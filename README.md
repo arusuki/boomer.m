@@ -50,7 +50,7 @@ open build/Boomer.app --args --demo --windowed
 | `M` | 水平镜像 |
 | `F` | 开关聚光灯 |
 | `Ctrl` + 滚轮 | 调整聚光灯半径；半径随图像缩放 |
-| `P` | 切换最近邻 / 线性采样 |
+| `P` | 循环切换最近邻 / 线性 / 双三次平滑采样 |
 | `L` | 实时捕获 / 冻结当前帧（屏幕模式） |
 | 空格 | 重新截屏并冻结（屏幕模式） |
 | `R` | 重载配置，失败时保留已有配置 |
@@ -58,7 +58,9 @@ open build/Boomer.app --args --demo --windowed
 | `H` / `?` | 显示或隐藏帮助 |
 | `Q` / `Esc` / `Cmd-Q` | 退出 |
 
-默认最近邻采样保留放大后的像素格。触控板双指滚动与滚轮一样用于缩放，捏合也可缩放。实时模式排除 Boomer 自身以避免画面递归；它显示桌面变化，但鼠标事件仍由 Boomer 接收。静态画面、相机和聚光灯不再变化时停止 Metal 绘制。
+默认使用双三次平滑采样，改善文字和细线放大后的像素块感；按 `P` 可对比三种效果。最近邻保留像素格，线性更柔和，双三次使用 Catmull–Rom 插值并限制局部颜色范围，抑制笔画周围的亮边和暗边。双三次仅在源像素被放大时启用，按实际 drawable 像素判断（含 Retina），原尺寸与缩小时使用线性采样。这是全图插值，不是文字识别或 AI 超分，不能恢复截图中已经丢失的字形细节。
+
+触控板双指滚动与滚轮一样用于缩放，捏合也可缩放。实时模式排除 Boomer 自身以避免画面递归；它显示桌面变化，但鼠标事件仍由 Boomer 接收。静态画面、相机和聚光灯不再变化时停止 Metal 绘制。
 
 ## 多显示器
 
@@ -90,16 +92,16 @@ drag_friction = 6
 scale_friction = 12
 flashlight_radius = 200
 flashlight_dim = 0.8
-linear_filter = 0
+filter_mode = 2
 ```
 
-`min_scale` 为 0.001–1，`max_scale` 为 1–1024；`scroll_speed` 为 (0, 100]；两个 friction 为 (0, 1000]；`flashlight_radius` 为 1–10000 逻辑点，`flashlight_dim` 为 0–1，`linear_filter` 为 0 或 1。原版四个配置键均可使用。缩放改为指数平滑，手感不与原版数值逐项一致。
+`min_scale` 为 0.001–1，`max_scale` 为 1–1024；`scroll_speed` 为 (0, 100]；两个 friction 为 (0, 1000]；`flashlight_radius` 为 1–10000 逻辑点，`flashlight_dim` 为 0–1。`filter_mode` 为 0（最近邻）、1（线性）或 2（双三次，默认）。旧配置的 `linear_filter = 0/1` 仍有效；两个键同时存在时 `filter_mode` 优先，与顺序无关。已有配置若指定 `linear_filter = 0`，需改成 `filter_mode = 2` 或按 `P` 切换才能启用平滑。原版四个配置键均可使用。缩放改为指数平滑，手感不与原版数值逐项一致。
 
 ## 开发与验证
 
 ```sh
 make test       # C 相机/配置测试（ASan + UBSan）及 CLI 测试
-make test-gpu   # 实际 GPU 离屏渲染：方向、颜色、镜像、聚光灯、缩放
+make test-gpu   # 实际 GPU 离屏渲染：方向、颜色、镜像、聚光灯、缩放、插值与边缘
 make test-window # 各已连接显示器的实际启动窗口位置；无需录屏权限
 ./build/boomer --demo --windowed --quit-after 3
 ./build/boomer --shader src/Shaders.metal --demo --windowed

@@ -112,6 +112,74 @@ static NSError *BMRenderError(NSString *message) {
     [commands presentDrawable:drawable];
     [commands commit];
 }
+- (BOOL)selfTestFiltering:(NSError **)error {
+    // Mid-gray steps expose cubic overshoot that a black/white fixture would
+    // hide through the render target's own [0,1] clamp. Also exercise alpha.
+    const uint8_t expectedRows[3][16] = {
+        {64,64,64,64,64,64,64,64,192,192,192,192,192,192,192,192},
+        {64,64,64,64,64,64,80,112,144,176,192,192,192,192,192,192},
+        {64,64,64,64,64,64,75,108,148,181,192,192,192,192,192,192}
+    };
+    const int sizes[] = {2, 4, 16}; // Minification, 1:1, and physical-pixel magnification.
+    const double background[] = {0.05, 0.04, 0.035}; // BGRA order.
+    for (int transparent = 0; transparent < 2; ++transparent) {
+        uint8_t pixels[4 * 4 * 4];
+        for (int y = 0; y < 4; ++y) for (int x = 0; x < 4; ++x) {
+            uint8_t value = x < 2 ? 64 : 192;
+            size_t i = (size_t)(y * 4 + x) * 4;
+            pixels[i] = pixels[i + 1] = transparent ? 0 : value;
+            pixels[i + 2] = value;
+            pixels[i + 3] = transparent ? value : 255;
+        }
+        MTLTextureDescriptor *sourceDesc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+            width:4 height:4 mipmapped:NO];
+        sourceDesc.storageMode = MTLStorageModeShared;
+        _texture = [_device newTextureWithDescriptor:sourceDesc];
+        if (!_texture) { if (error) *error = BMRenderError(@"Could not allocate filter test input."); return NO; }
+        [_texture replaceRegion:MTLRegionMake2D(0,0,4,4) mipmapLevel:0 withBytes:pixels bytesPerRow:16];
+        for (int sizeIndex = 0; sizeIndex < 3; ++sizeIndex) {
+            int size = sizes[sizeIndex];
+            MTLTextureDescriptor *desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                width:(NSUInteger)size height:(NSUInteger)size mipmapped:NO];
+            desc.usage = MTLTextureUsageRenderTarget;
+            desc.storageMode = MTLStorageModeShared;
+            id<MTLTexture> target = [_device newTextureWithDescriptor:desc];
+            if (!target) { if (error) *error = BMRenderError(@"Could not allocate filter test output."); return NO; }
+            for (int filter = 0; filter < 3; ++filter) for (int mirror = 0; mirror < 2; ++mirror) {
+                // Logical scale stays 1; the drawable determines magnification.
+                BMUniforms u = {.viewport = {4,4}, .imageSize = {4,4}, .scale = 1,
+                    .radius = 1, .filterMode = filter, .mirror = mirror};
+                MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+                pass.colorAttachments[0].texture = target;
+                pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+                pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+                id<MTLCommandBuffer> commands = [_queue commandBuffer];
+                [self encode:commands pass:pass uniforms:u];
+                [commands commit]; [commands waitUntilCompleted];
+                if (commands.error) { if (error) *error = commands.error; return NO; }
+                uint8_t result[16 * 16 * 4];
+                [target getBytes:result bytesPerRow:(NSUInteger)size * 4
+                    fromRegion:MTLRegionMake2D(0,0,(NSUInteger)size,(NSUInteger)size) mipmapLevel:0];
+                for (int y = 0; y < size; ++y) for (int x = 0; x < size; ++x) {
+                    int sx = mirror ? size - 1 - x : x;
+                    int value = size == 16 ? expectedRows[filter][sx] : (sx < size / 2 ? 64 : 192);
+                    for (int channel = 0; channel < 4; ++channel) {
+                        int expected = channel == 3 ? 255 : value;
+                        if (transparent && channel < 3)
+                            expected = (int)lround((channel == 2 ? value : 0) + background[channel] * (255 - value));
+                        if (abs(result[(y * size + x) * 4 + channel] - expected) > 1) {
+                            if (error) *error = BMRenderError([NSString stringWithFormat:
+                                @"Filter %d test failed: size %d, alpha %d, mirror %d, (%d,%d), channel %d: got %u, expected %d.",
+                                filter,size,transparent,mirror,x,y,channel,result[(y * size + x) * 4 + channel],expected]);
+                            return NO;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return YES;
+}
 - (BOOL)selfTest:(NSError **)error {
     // Asymmetric 2×2 fixture catches flips, mirroring, channel swaps and shader ABI issues.
     uint8_t pixels[] = {0,0,255,255, 0,255,0,255, 255,0,0,255, 255,255,255,255};
@@ -155,6 +223,6 @@ static NSError *BMRenderError(NSString *message) {
             }
         }
     }
-    return YES;
+    return [self selfTestFiltering:error];
 }
 @end
